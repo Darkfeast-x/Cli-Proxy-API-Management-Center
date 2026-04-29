@@ -5,6 +5,7 @@ import { authFilesApi } from '@/services/api/authFiles';
 import type { GeminiKeyConfig, OpenAIProviderConfig, ProviderKeyConfig } from '@/types';
 import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
+import { getAuthFileIndexValue } from '@/utils/authFiles';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
 import { collectUsageDetails, formatCompactNumber, normalizeAuthIndex } from '@/utils/usage';
 import type { UsagePayload } from './hooks/useUsageData';
@@ -55,7 +56,7 @@ export function CredentialStatsCard({
 
         const map = new Map<string, CredentialInfo>();
         files.forEach((file) => {
-          const key = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+          const key = normalizeAuthIndex(getAuthFileIndexValue(file));
           if (!key) return;
 
           map.set(key, {

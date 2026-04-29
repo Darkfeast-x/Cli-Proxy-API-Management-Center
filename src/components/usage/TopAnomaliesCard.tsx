@@ -5,6 +5,7 @@ import { Select } from '@/components/ui/Select';
 import { authFilesApi } from '@/services/api/authFiles';
 import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
+import { getAuthFileIndexValue } from '@/utils/authFiles';
 import {
   calculateCost,
   collectUsageDetails,
@@ -67,7 +68,7 @@ export function TopAnomaliesCard({ usage, loading, modelPrices, hasPrices }: Top
 
         const nextMap = new Map<string, CredentialInfo>();
         files.forEach((file) => {
-          const key = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+          const key = normalizeAuthIndex(getAuthFileIndexValue(file));
           if (!key) return;
           nextMap.set(key, {
             name: file.name || key,

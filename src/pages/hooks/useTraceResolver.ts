@@ -4,6 +4,7 @@ import { authFilesApi } from '@/services/api/authFiles';
 import { USAGE_STATS_STALE_TIME_MS, useUsageStatsStore } from '@/stores';
 import type { AuthFileItem, Config } from '@/types';
 import type { CredentialInfo, SourceInfo } from '@/types/sourceInfo';
+import { getAuthFileIndexValue } from '@/utils/authFiles';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
 import { parseTimestampMs } from '@/utils/timestamp';
 import {
@@ -141,7 +142,7 @@ export function useTraceResolver(options: UseTraceResolverOptions): UseTraceReso
         if (Array.isArray(files)) {
           const map = new Map<string, CredentialInfo>();
           files.forEach((file) => {
-            const key = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+            const key = normalizeAuthIndex(getAuthFileIndexValue(file));
             if (!key) return;
             map.set(key, {
               name: file.name || key,

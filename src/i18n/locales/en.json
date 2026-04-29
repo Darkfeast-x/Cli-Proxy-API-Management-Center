@@ -1061,6 +1061,8 @@
     "range_12h": "Last 12 Hours",
     "auth_filter": "Auth File",
     "provider_filter": "Provider",
+    "historical_auth_index_prefix": "Historical Auth Index",
+    "historical_source_prefix": "Historical Source",
     "search_filter": "Search",
     "search_placeholder": "Search models, sources, auth files, or providers",
     "compare_previous_period": "vs previous period",

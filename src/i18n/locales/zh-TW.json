@@ -1087,6 +1087,8 @@
     "range_12h": "最近 12 小時",
     "auth_filter": "認證檔案",
     "provider_filter": "Provider",
+    "historical_auth_index_prefix": "歷史驗證索引",
+    "historical_source_prefix": "歷史來源",
     "search_filter": "搜尋過濾",
     "search_placeholder": "搜尋模型、來源、認證檔案、Provider",
     "compare_previous_period": "較上個週期",

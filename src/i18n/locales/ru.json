@@ -1058,6 +1058,8 @@
     "range_12h": "Последние 12 часов",
     "auth_filter": "Файл авторизации",
     "provider_filter": "Provider",
+    "historical_auth_index_prefix": "Исторический Auth Index",
+    "historical_source_prefix": "Исторический источник",
     "search_filter": "Поиск",
     "search_placeholder": "Поиск по моделям, источникам, auth-файлам и providers",
     "compare_previous_period": "к прошлому периоду",

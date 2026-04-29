@@ -8,6 +8,7 @@ import { Select } from '@/components/ui/Select';
 import { authFilesApi } from '@/services/api/authFiles';
 import { buildUsageLogsJumpSearch } from '@/utils/logsJump';
 import { isTraceableRequestPath } from '@/pages/hooks/useTraceResolver';
+import { getAuthFileIndexValue } from '@/utils/authFiles';
 import type { GeminiKeyConfig, ProviderKeyConfig, OpenAIProviderConfig } from '@/types';
 import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
@@ -20,7 +21,6 @@ import {
   extractLatencyMs,
   extractTotalTokens,
   formatDurationMs,
-  formatUsd,
   LATENCY_SOURCE_FIELD,
   normalizeAuthIndex,
   type ModelPrice
@@ -33,6 +33,10 @@ const RESULT_FILTER_SUCCESS = 'success';
 const RESULT_FILTER_FAILURE = 'failure';
 const MAX_RENDERED_EVENTS = 500;
 const DETAIL_FIELD_NOT_AVAILABLE = '-';
+const REQUEST_EVENT_COST_FORMATTER = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 6,
+  maximumFractionDigits: 6
+});
 const REQUEST_DETAIL_STATUS_PATHS: ReadonlyArray<readonly string[]> = [
   ['status'],
   ['request_status'],
@@ -385,6 +389,32 @@ const resolveRequestPathFromEndpoint = (endpoint: string | null): string | null 
   return endpoint;
 };
 
+const formatRequestEventCost = (value: number): string => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return '$0.000000';
+  }
+
+  return `$${REQUEST_EVENT_COST_FORMATTER.format(num)}`;
+};
+
+const formatHistoryOptionLabel = (prefix: string, value: string) => `${prefix} · ${value}`;
+
+const sortFilterOptions = (
+  options: Array<{ value: string; label: string }>,
+  historicalPrefix: string
+) =>
+  [...options].sort((a, b) => {
+    const aHistorical = a.label.startsWith(`${historicalPrefix} · `);
+    const bHistorical = b.label.startsWith(`${historicalPrefix} · `);
+
+    if (aHistorical !== bHistorical) {
+      return aHistorical ? 1 : -1;
+    }
+
+    return a.label.localeCompare(b.label);
+  });
+
 const buildAdditionalFields = (rawDetail: Record<string, unknown>): RequestEventDetailField[] => {
   const fields: RequestEventDetailField[] = [];
   const seen = new Set<string>();
@@ -504,6 +534,8 @@ export function RequestEventsDetailsCard({
 }: RequestEventsDetailsCardProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const historicalSourceLabel = t('usage_stats.historical_source_prefix');
+  const historicalAuthIndexLabel = t('usage_stats.historical_auth_index_prefix');
   const latencyHint = t('usage_stats.latency_unit_hint', {
     field: LATENCY_SOURCE_FIELD,
     unit: t('usage_stats.duration_unit_ms')
@@ -530,7 +562,7 @@ export function RequestEventsDetailsCard({
         if (!Array.isArray(files)) return;
         const map = new Map<string, CredentialInfo>();
         files.forEach((file) => {
-          const key = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+          const key = normalizeAuthIndex(getAuthFileIndexValue(file));
           if (!key) return;
           map.set(key, {
             name: file.name || key,
@@ -714,28 +746,42 @@ export function RequestEventsDetailsCard({
     const optionMap = new Map<string, string>();
     rows.forEach((row) => {
       if (!optionMap.has(row.sourceKey)) {
-        optionMap.set(row.sourceKey, row.source);
+        const label =
+          row.sourceType || row.sourceKey.startsWith('openai:') || row.sourceKey.startsWith('type:')
+            ? row.source
+            : formatHistoryOptionLabel(historicalSourceLabel, row.source);
+        optionMap.set(row.sourceKey, label);
       }
     });
 
     return [
       { value: ALL_FILTER, label: t('usage_stats.filter_all') },
-      ...Array.from(optionMap.entries()).map(([value, label]) => ({
-        value,
-        label
-      }))
+      ...sortFilterOptions(
+        Array.from(optionMap.entries()).map(([value, label]) => ({
+          value,
+          label
+        })),
+        historicalSourceLabel
+      )
     ];
-  }, [rows, t]);
+  }, [historicalSourceLabel, rows, t]);
 
   const authIndexOptions = useMemo(
     () => [
       { value: ALL_FILTER, label: t('usage_stats.filter_all') },
-      ...Array.from(new Set(rows.map((row) => row.authIndex))).map((authIndex) => ({
-        value: authIndex,
-        label: authIndex
-      }))
+      ...sortFilterOptions(
+        Array.from(new Set(rows.map((row) => row.authIndex))).map((authIndex) => ({
+          value: authIndex,
+          label:
+            authIndex === DETAIL_FIELD_NOT_AVAILABLE
+              ? authIndex
+              : authFileMap.get(authIndex)?.name ||
+                formatHistoryOptionLabel(historicalAuthIndexLabel, authIndex)
+        })),
+        historicalAuthIndexLabel
+      )
     ],
-    [rows, t]
+    [authFileMap, historicalAuthIndexLabel, rows, t]
   );
 
   const resultOptions = useMemo(
@@ -1255,7 +1301,7 @@ export function RequestEventsDetailsCard({
                         </td>
                         {hasLatencyData && <td className={styles.durationCell}>{formatDurationMs(row.latencyMs)}</td>}
                         <td className={styles.requestEventsCost}>
-                          {row.cost > 0 ? formatUsd(row.cost) : '--'}
+                          {row.cost > 0 ? formatRequestEventCost(row.cost) : '--'}
                         </td>
                         <td>{row.inputTokens.toLocaleString()}</td>
                         <td>{row.outputTokens.toLocaleString()}</td>

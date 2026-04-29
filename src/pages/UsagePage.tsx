@@ -40,6 +40,7 @@ import {
   useChartData
 } from '@/components/usage';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
+import { getAuthFileIndexValue } from '@/utils/authFiles';
 import {
   collectUsageDetails,
   filterUsageByDetail,
@@ -160,6 +161,47 @@ const getProviderFilterInfo = (sourceInfo: {
   };
 };
 
+const formatHistoryOptionLabel = (prefix: string, value: string) => `${prefix} · ${value}`;
+
+const formatAuthFilterOptionLabel = (
+  authKey: string,
+  authInfo: CredentialInfo | undefined,
+  historicalAuthIndexLabel: string
+) => {
+  const name = authInfo?.name?.trim();
+  if (name) {
+    return name;
+  }
+
+  return formatHistoryOptionLabel(historicalAuthIndexLabel, authKey);
+};
+
+const formatProviderFilterOptionLabel = (
+  providerInfo: { key: string; label: string },
+  historicalSourceLabel: string
+) => {
+  if (providerInfo.key.startsWith('source:') || providerInfo.key.startsWith('auth:')) {
+    return formatHistoryOptionLabel(historicalSourceLabel, providerInfo.label);
+  }
+
+  return providerInfo.label;
+};
+
+const sortFilterOptions = (
+  options: Array<{ value: string; label: string }>,
+  historicalPrefix: string
+) =>
+  [...options].sort((a, b) => {
+    const aHistorical = a.label.startsWith(`${historicalPrefix} · `);
+    const bHistorical = b.label.startsWith(`${historicalPrefix} · `);
+
+    if (aHistorical !== bHistorical) {
+      return aHistorical ? 1 : -1;
+    }
+
+    return a.label.localeCompare(b.label);
+  });
+
 export function UsagePage() {
   const { t } = useTranslation();
   const isMobile = useMediaQuery('(max-width: 768px)');
@@ -233,7 +275,7 @@ export function UsagePage() {
 
         const map = new Map<string, CredentialInfo>();
         files.forEach((file) => {
-          const key = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+          const key = normalizeAuthIndex(getAuthFileIndexValue(file));
           if (!key) return;
           map.set(key, {
             name: file.name || key,
@@ -304,35 +346,45 @@ export function UsagePage() {
 
   const authOptions = useMemo(() => {
     const optionMap = new Map<string, string>();
+    const historicalAuthIndexLabel = t('usage_stats.historical_auth_index_prefix');
+
     collectUsageDetails(baseUsage).forEach((detail) => {
       const authKey = normalizeAuthIndex(detail.auth_index);
       if (!authKey) {
         return;
       }
-      optionMap.set(authKey, authFileMap.get(authKey)?.name || authKey);
+      optionMap.set(
+        authKey,
+        formatAuthFilterOptionLabel(authKey, authFileMap.get(authKey), historicalAuthIndexLabel)
+      );
     });
 
     if (!optionMap.size) {
       authFileMap.forEach((info, key) => {
-        optionMap.set(key, info.name || key);
+        optionMap.set(key, formatAuthFilterOptionLabel(key, info, historicalAuthIndexLabel));
       });
     }
 
     return [
       { value: ALL_FILTER, label: t('usage_stats.filter_all') },
-      ...Array.from(optionMap.entries())
-        .map(([value, label]) => ({ value, label }))
-        .sort((a, b) => a.label.localeCompare(b.label))
+      ...sortFilterOptions(
+        Array.from(optionMap.entries()).map(([value, label]) => ({ value, label })),
+        historicalAuthIndexLabel
+      )
     ];
   }, [authFileMap, baseUsage, t]);
 
   const providerOptions = useMemo(() => {
     const optionMap = new Map<string, string>();
+    const historicalSourceLabel = t('usage_stats.historical_source_prefix');
 
     collectUsageDetails(baseUsage).forEach((detail) => {
       const sourceInfo = resolveSourceDisplay(detail.source ?? '', detail.auth_index, sourceInfoMap, authFileMap);
       const providerInfo = getProviderFilterInfo(sourceInfo);
-      optionMap.set(providerInfo.key, providerInfo.label);
+      optionMap.set(
+        providerInfo.key,
+        formatProviderFilterOptionLabel(providerInfo, historicalSourceLabel)
+      );
     });
 
     if (!optionMap.size) {
@@ -350,9 +402,10 @@ export function UsagePage() {
 
     return [
       { value: ALL_FILTER, label: t('usage_stats.filter_all') },
-      ...Array.from(optionMap.entries())
-        .map(([value, label]) => ({ value, label }))
-        .sort((a, b) => a.label.localeCompare(b.label))
+      ...sortFilterOptions(
+        Array.from(optionMap.entries()).map(([value, label]) => ({ value, label })),
+        historicalSourceLabel
+      )
     ];
   }, [
     authFileMap,

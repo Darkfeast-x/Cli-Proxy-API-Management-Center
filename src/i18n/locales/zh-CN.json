@@ -1061,6 +1061,8 @@
     "range_12h": "最近12小时",
     "auth_filter": "认证文件",
     "provider_filter": "Provider",
+    "historical_auth_index_prefix": "历史认证索引",
+    "historical_source_prefix": "历史来源",
     "search_filter": "搜索过滤",
     "search_placeholder": "搜索模型、来源、认证文件、Provider",
     "compare_previous_period": "较上个周期",
