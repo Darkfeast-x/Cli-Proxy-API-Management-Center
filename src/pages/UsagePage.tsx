@@ -644,6 +644,7 @@ export function UsagePage() {
           <Button
             variant="secondary"
             size="sm"
+            className={styles.headerActionButton}
             onClick={handleExport}
             loading={exporting}
             disabled={loading || importing}
@@ -653,6 +654,7 @@ export function UsagePage() {
           <Button
             variant="secondary"
             size="sm"
+            className={styles.headerActionButton}
             onClick={handleImport}
             loading={importing}
             disabled={loading || exporting}
@@ -662,6 +664,7 @@ export function UsagePage() {
           <Button
             variant="secondary"
             size="sm"
+            className={styles.headerActionButton}
             onClick={() => void loadUsage().catch(() => {})}
             disabled={loading || exporting || importing}
           >
