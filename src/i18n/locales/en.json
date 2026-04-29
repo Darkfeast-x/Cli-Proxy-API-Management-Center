@@ -1042,7 +1042,13 @@
     "request_events_limit_hint": "Showing {{shown}} of {{total}} events to keep rendering responsive.",
     "input_tokens": "Input Tokens",
     "output_tokens": "Output Tokens",
-    "last_updated": "Updated"
+    "last_updated": "Updated",
+    "range_12h": "Last 12 Hours",
+    "auth_filter": "Auth File",
+    "provider_filter": "Provider",
+    "search_filter": "Search",
+    "search_placeholder": "Search models, sources, auth files, or providers",
+    "request_events_cost": "Cost"
   },
   "stats": {
     "success": "Success",

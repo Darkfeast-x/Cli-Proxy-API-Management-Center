@@ -1039,7 +1039,13 @@
     "request_events_limit_hint": "Показано {{shown}} из {{total}} событий для стабильной производительности.",
     "input_tokens": "Входные токены",
     "output_tokens": "Выходные токены",
-    "last_updated": "Обновлено"
+    "last_updated": "Обновлено",
+    "range_12h": "Последние 12 часов",
+    "auth_filter": "Файл авторизации",
+    "provider_filter": "Provider",
+    "search_filter": "Поиск",
+    "search_placeholder": "Поиск по моделям, источникам, auth-файлам и providers",
+    "request_events_cost": "Стоимость"
   },
   "stats": {
     "success": "Успех",

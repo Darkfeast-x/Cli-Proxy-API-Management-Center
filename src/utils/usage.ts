@@ -78,6 +78,11 @@ export interface UsageDetailWithEndpoint extends UsageDetail {
   __timestampMs: number;
 }
 
+export interface UsageDetailFilterContext {
+  apiName: string;
+  modelName: string;
+}
+
 export interface ApiStats {
   endpoint: string;
   totalRequests: number;
@@ -103,13 +108,14 @@ export interface ModelStatsSummary {
   latencySampleCount: number;
 }
 
-export type UsageTimeRange = '7h' | '24h' | '7d' | 'all';
+export type UsageTimeRange = '7h' | '12h' | '24h' | '7d' | 'all';
 
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
 const MODEL_PRICE_STORAGE_KEY = 'cli-proxy-model-prices-v2';
 const USAGE_ENDPOINT_METHOD_REGEX = /^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)/i;
 const USAGE_TIME_RANGE_MS: Record<Exclude<UsageTimeRange, 'all'>, number> = {
   '7h': 7 * 60 * 60 * 1000,
+  '12h': 12 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
@@ -198,6 +204,135 @@ export function filterUsageByTimeRange<T>(
         }
         const timestamp = parseTimestampMs(detailRecord.timestamp);
         if (Number.isNaN(timestamp) || timestamp < windowStart || timestamp > nowMs) {
+          return;
+        }
+
+        filteredDetails.push(detail);
+        modelSummary.totalRequests += 1;
+        if (detailRecord.failed === true) {
+          modelSummary.failureCount += 1;
+        } else {
+          modelSummary.successCount += 1;
+        }
+        modelSummary.totalTokens += extractTotalTokens(detailRecord);
+      });
+
+      if (!filteredDetails.length) {
+        return;
+      }
+
+      filteredModels[modelName] = {
+        ...modelEntry,
+        ...toUsageSummaryFields(modelSummary),
+        details: filteredDetails,
+      };
+      hasModelData = true;
+
+      apiSummary.totalRequests += modelSummary.totalRequests;
+      apiSummary.successCount += modelSummary.successCount;
+      apiSummary.failureCount += modelSummary.failureCount;
+      apiSummary.totalTokens += modelSummary.totalTokens;
+    });
+
+    if (!hasModelData) {
+      return;
+    }
+
+    filteredApis[apiName] = {
+      ...apiEntry,
+      ...toUsageSummaryFields(apiSummary),
+      models: filteredModels,
+    };
+
+    totalSummary.totalRequests += apiSummary.totalRequests;
+    totalSummary.successCount += apiSummary.successCount;
+    totalSummary.failureCount += apiSummary.failureCount;
+    totalSummary.totalTokens += apiSummary.totalTokens;
+  });
+
+  return {
+    ...usageRecord,
+    ...toUsageSummaryFields(totalSummary),
+    apis: filteredApis,
+  } as T;
+}
+
+export function filterUsageByDetail<T>(
+  usageData: T,
+  predicate: (detail: UsageDetail, context: UsageDetailFilterContext) => boolean
+): T {
+  const usageRecord = isRecord(usageData) ? usageData : null;
+  const apis = getApisRecord(usageData);
+  if (!usageRecord || !apis) {
+    return usageData;
+  }
+
+  const filteredApis: Record<string, unknown> = {};
+  const totalSummary = createUsageSummary();
+  const sourceCache = new Map<string, string>();
+
+  const normalizeSource = (value: unknown): string => {
+    const raw =
+      typeof value === 'string'
+        ? value
+        : value === null || value === undefined
+          ? ''
+          : String(value);
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    const cached = sourceCache.get(trimmed);
+    if (cached !== undefined) return cached;
+    const normalized = normalizeUsageSourceId(trimmed);
+    sourceCache.set(trimmed, normalized);
+    return normalized;
+  };
+
+  Object.entries(apis).forEach(([apiName, apiEntry]) => {
+    if (!isRecord(apiEntry)) {
+      return;
+    }
+
+    const models = isRecord(apiEntry.models) ? apiEntry.models : null;
+    if (!models) {
+      return;
+    }
+
+    const filteredModels: Record<string, unknown> = {};
+    const apiSummary = createUsageSummary();
+    let hasModelData = false;
+
+    Object.entries(models).forEach(([modelName, modelEntry]) => {
+      if (!isRecord(modelEntry)) {
+        return;
+      }
+
+      const detailsRaw = Array.isArray(modelEntry.details) ? modelEntry.details : [];
+      const modelSummary = createUsageSummary();
+      const filteredDetails: unknown[] = [];
+
+      detailsRaw.forEach((detail) => {
+        const detailRecord = isRecord(detail) ? detail : null;
+        if (!detailRecord || typeof detailRecord.timestamp !== 'string') {
+          return;
+        }
+
+        const timestampMs = parseTimestampMs(detailRecord.timestamp);
+        const normalizedDetail: UsageDetail = {
+          timestamp: detailRecord.timestamp,
+          source: normalizeSource(detailRecord.source),
+          auth_index:
+            (detailRecord?.auth_index ??
+              detailRecord?.authIndex ??
+              detailRecord?.AuthIndex ??
+              null) as UsageDetail['auth_index'],
+          latency_ms: extractLatencyMs(detailRecord) ?? undefined,
+          tokens: (isRecord(detailRecord.tokens) ? detailRecord.tokens : {}) as UsageDetail['tokens'],
+          failed: detailRecord.failed === true,
+          __modelName: modelName,
+          __timestampMs: Number.isNaN(timestampMs) ? 0 : timestampMs,
+        };
+
+        if (!predicate(normalizedDetail, { apiName, modelName })) {
           return;
         }
 
