@@ -600,6 +600,17 @@ export function UsagePage() {
         }}
       />
 
+      <RequestEventsDetailsCard
+        usage={filteredUsage}
+        loading={loading}
+        geminiKeys={geminiKeys}
+        claudeConfigs={claudeConfigs}
+        codexConfigs={codexConfigs}
+        vertexConfigs={vertexConfigs}
+        openaiProviders={openaiProvidersForUsage}
+        modelPrices={modelPrices}
+      />
+
       <ChartLineSelector
         chartLines={chartLines}
         modelNames={filteredModelNames}
@@ -653,17 +664,6 @@ export function UsagePage() {
         <ApiDetailsCard apiStats={apiStats} loading={loading} hasPrices={hasPrices} />
         <ModelStatsCard modelStats={modelStats} loading={loading} hasPrices={hasPrices} />
       </div>
-
-      <RequestEventsDetailsCard
-        usage={filteredUsage}
-        loading={loading}
-        geminiKeys={geminiKeys}
-        claudeConfigs={claudeConfigs}
-        codexConfigs={codexConfigs}
-        vertexConfigs={vertexConfigs}
-        openaiProviders={openaiProvidersForUsage}
-        modelPrices={modelPrices}
-      />
 
       <CredentialStatsCard
         usage={filteredUsage}
