@@ -1048,7 +1048,19 @@
     "provider_filter": "Provider",
     "search_filter": "搜索过滤",
     "search_placeholder": "搜索模型、来源、认证文件、Provider",
-    "request_events_cost": "花费"
+    "request_events_cost": "花费",
+    "request_events_detail_expand": "展开详情",
+    "request_events_detail_collapse": "收起详情",
+    "request_events_detail_result": "请求结果",
+    "request_events_detail_status": "状态",
+    "request_events_detail_status_code": "状态码",
+    "request_events_detail_reasoning_effort": "推理级别",
+    "request_events_detail_endpoint": "接口",
+    "request_events_detail_request_method": "请求方法",
+    "request_events_detail_request_path": "请求路径",
+    "request_events_detail_source_raw": "原始来源",
+    "request_events_detail_service_tier": "服务层级",
+    "request_events_detail_additional": "附加字段"
   },
   "stats": {
     "success": "成功",

@@ -69,6 +69,7 @@ export interface UsageDetail {
   failed: boolean;
   __modelName?: string;
   __timestampMs?: number;
+  __rawDetail?: Record<string, unknown>;
 }
 
 export interface UsageDetailWithEndpoint extends UsageDetail {
@@ -578,6 +579,239 @@ export function maskUsageSensitiveValue(
   return masked;
 }
 
+type UsageDisplayMaskKind = 'generic' | 'source' | 'path' | 'endpoint';
+
+const EMAIL_LIKE_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const URL_LIKE_REGEX = /^[a-z][a-z0-9+.-]*:\/\//i;
+const HTTP_METHOD_PREFIX_REGEX = /^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(.+)$/i;
+const VERSION_PATH_SEGMENT_REGEX = /^v\d+(?:[._-]\d+)*$/i;
+const DISPLAY_SECRET_PREFIXES = ['sk-ant-', 'sk-', 'AIza', 'hf_', 'pk_', 'rk_', 'AI'];
+
+const maskDisplaySecretValue = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const prefix = DISPLAY_SECRET_PREFIXES.find((item) => trimmed.startsWith(item)) ?? '';
+  const body = prefix ? trimmed.slice(prefix.length) : trimmed;
+  if (!body) {
+    return `${prefix}****`;
+  }
+
+  if (body.length <= 2) {
+    return `${prefix}${body}**`;
+  }
+
+  if (body.length <= 8) {
+    const leftVisible = Math.max(1, Math.floor((body.length - 2) / 2));
+    const rightVisible = Math.max(1, body.length - 2 - leftVisible);
+    return `${prefix}${body.slice(0, leftVisible)}**${body.slice(body.length - rightVisible)}`;
+  }
+
+  return `${prefix}${body.slice(0, 4)}****${body.slice(-4)}`;
+};
+
+const maskMiddle = (value: string, startVisible = 2, endVisible = 2): string => {
+  const text = value.trim();
+  if (!text) {
+    return '';
+  }
+
+  if (text.length <= startVisible + endVisible + 1) {
+    if (text.length <= 2) {
+      return text;
+    }
+    return `${text.slice(0, 1)}***${text.slice(-1)}`;
+  }
+
+  return `${text.slice(0, startVisible)}***${text.slice(-endVisible)}`;
+};
+
+const maskPathSegment = (segment: string): string => {
+  if (!segment) {
+    return segment;
+  }
+
+  if (VERSION_PATH_SEGMENT_REGEX.test(segment) || (/^\d+$/.test(segment) && segment.length <= 3)) {
+    return segment;
+  }
+
+  const dotIndex = segment.lastIndexOf('.');
+  if (dotIndex > 1 && dotIndex < segment.length - 1) {
+    const base = segment.slice(0, dotIndex);
+    const extension = segment.slice(dotIndex);
+    return `${maskMiddle(base)}${extension}`;
+  }
+
+  return maskMiddle(segment);
+};
+
+const maskQueryString = (query: string): string => {
+  if (!query) {
+    return '';
+  }
+
+  return query.replace(/([^?&=]+)=([^&#]*)/g, (_full, key, value) => {
+    if (!value) {
+      return `${key}=`;
+    }
+    return `${key}=${maskMiddle(value, 1, 1)}`;
+  });
+};
+
+const maskPathLike = (value: string): string => {
+  if (!value) {
+    return value;
+  }
+
+  const [pathAndQuery, hashPart = ''] = value.split('#', 2);
+  const [pathPart, queryPart = ''] = pathAndQuery.split('?', 2);
+  const maskedPath = pathPart.replace(/[^/]+/g, (segment) => maskPathSegment(segment));
+  const maskedQuery = queryPart ? `?${maskQueryString(queryPart)}` : '';
+  const maskedHash = hashPart ? '#***' : '';
+
+  return `${maskedPath}${maskedQuery}${maskedHash}`;
+};
+
+const maskHostLike = (value: string): string => {
+  if (!value) {
+    return value;
+  }
+
+  if (value.startsWith('[') && value.endsWith(']')) {
+    return value;
+  }
+
+  const portIndex = value.lastIndexOf(':');
+  const hasPort = portIndex > -1 && value.indexOf(':') === portIndex;
+  const hostname = hasPort ? value.slice(0, portIndex) : value;
+  const port = hasPort ? value.slice(portIndex) : '';
+
+  const maskedHost = hostname
+    .split('.')
+    .map((segment, index, allSegments) => {
+      if (!segment) {
+        return segment;
+      }
+
+      const isTopLevelDomain = allSegments.length > 1 && index === allSegments.length - 1;
+      return isTopLevelDomain ? segment : maskMiddle(segment, 1, 1);
+    })
+    .join('.');
+
+  return `${maskedHost}${port}`;
+};
+
+const maskUrlLike = (value: string): string => {
+  try {
+    const url = new URL(value);
+    const username = url.username ? maskMiddle(url.username, 1, 1) : '';
+    const password = url.password ? maskMiddle(url.password, 1, 1) : '';
+    const credentials =
+      username || password ? `${username}${password ? `:${password}` : ''}@` : '';
+
+    return `${url.protocol}//${credentials}${maskHostLike(url.host)}${maskPathLike(
+      `${url.pathname}${url.search}${url.hash}`
+    )}`;
+  } catch {
+    return maskPathLike(value);
+  }
+};
+
+const maskEmailLike = (value: string): string => {
+  const [localPart, domain = ''] = value.split('@');
+  if (!localPart || !domain) {
+    return maskMiddle(value);
+  }
+
+  return `${maskMiddle(localPart)}@${maskHostLike(domain)}`;
+};
+
+const maskSourceLike = (value: string): string => {
+  if (EMAIL_LIKE_REGEX.test(value)) {
+    return maskEmailLike(value);
+  }
+
+  if (URL_LIKE_REGEX.test(value)) {
+    return maskUrlLike(value);
+  }
+
+  if (/[\\/]/.test(value)) {
+    return maskPathLike(value.replace(/\\/g, '/'));
+  }
+
+  if (value.includes('.') && !/\s/.test(value)) {
+    return maskPathSegment(value);
+  }
+
+  return maskMiddle(value);
+};
+
+export function obfuscateUsageDisplayValue(
+  value: unknown,
+  options: {
+    kind?: UsageDisplayMaskKind;
+    masker?: (val: string) => string;
+  } = {}
+): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  const raw = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (!raw) {
+    return '';
+  }
+
+  const masker = options.masker ?? maskDisplaySecretValue;
+  const kind = options.kind ?? 'generic';
+  const sensitiveMasked = maskUsageSensitiveValue(raw, masker);
+
+  if (kind === 'endpoint') {
+    const methodMatch = sensitiveMasked.match(HTTP_METHOD_PREFIX_REGEX);
+    if (methodMatch) {
+      return `${methodMatch[1].toUpperCase()} ${maskPathLike(methodMatch[2])}`;
+    }
+    if (URL_LIKE_REGEX.test(sensitiveMasked)) {
+      return maskUrlLike(sensitiveMasked);
+    }
+    if (/[\\/]/.test(sensitiveMasked)) {
+      return maskPathLike(sensitiveMasked.replace(/\\/g, '/'));
+    }
+    return sensitiveMasked === raw ? maskMiddle(sensitiveMasked) : sensitiveMasked;
+  }
+
+  if (kind === 'path') {
+    return URL_LIKE_REGEX.test(sensitiveMasked)
+      ? maskUrlLike(sensitiveMasked)
+      : maskPathLike(sensitiveMasked.replace(/\\/g, '/'));
+  }
+
+  if (kind === 'source') {
+    if (
+      sensitiveMasked !== raw &&
+      !EMAIL_LIKE_REGEX.test(raw) &&
+      !URL_LIKE_REGEX.test(raw) &&
+      !/[\\/]/.test(raw) &&
+      !raw.includes('.')
+    ) {
+      return sensitiveMasked;
+    }
+    return maskSourceLike(sensitiveMasked);
+  }
+
+  if (URL_LIKE_REGEX.test(sensitiveMasked)) {
+    return maskUrlLike(sensitiveMasked);
+  }
+
+  if (EMAIL_LIKE_REGEX.test(sensitiveMasked)) {
+    return maskEmailLike(sensitiveMasked);
+  }
+
+  return sensitiveMasked === raw ? maskMiddle(sensitiveMasked) : sensitiveMasked;
+}
+
 /**
  * 格式化每分钟数值
  */
@@ -697,6 +931,7 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           failed: detailRaw.failed === true,
           __modelName: modelName,
           __timestampMs: Number.isNaN(timestampMs) ? 0 : timestampMs,
+          __rawDetail: detailRaw,
         });
       });
     });
@@ -777,6 +1012,7 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           __endpointMethod: endpointMethod,
           __endpointPath: endpointPath,
           __timestampMs: Number.isNaN(timestampMs) ? 0 : timestampMs,
+          __rawDetail: detailRaw,
         });
       });
     });

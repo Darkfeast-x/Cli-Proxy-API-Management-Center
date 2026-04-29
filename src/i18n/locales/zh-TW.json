@@ -1074,7 +1074,19 @@
     "provider_filter": "Provider",
     "search_filter": "搜尋過濾",
     "search_placeholder": "搜尋模型、來源、認證檔案、Provider",
-    "request_events_cost": "花費"
+    "request_events_cost": "花費",
+    "request_events_detail_expand": "展開詳情",
+    "request_events_detail_collapse": "收起詳情",
+    "request_events_detail_result": "請求結果",
+    "request_events_detail_status": "狀態",
+    "request_events_detail_status_code": "狀態碼",
+    "request_events_detail_reasoning_effort": "推理等級",
+    "request_events_detail_endpoint": "介面",
+    "request_events_detail_request_method": "請求方法",
+    "request_events_detail_request_path": "請求路徑",
+    "request_events_detail_source_raw": "原始來源",
+    "request_events_detail_service_tier": "服務層級",
+    "request_events_detail_additional": "附加欄位"
   },
   "stats": {
     "success": "成功",

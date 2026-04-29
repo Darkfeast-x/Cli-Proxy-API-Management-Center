@@ -951,6 +951,47 @@
   min-width: 160px;
 }
 
+.requestEventsSummaryRow {
+  cursor: pointer;
+}
+
+.requestEventsSummaryRowExpanded,
+.requestEventsSummaryRow:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.requestEventsToggleButton {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: $radius-sm;
+  }
+}
+
+.requestEventsToggleIndicator {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.requestEventsToggleText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .requestEventsSourceCell,
 .requestEventsAuthIndex {
   font-family:
@@ -987,6 +1028,69 @@
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.requestEventsExpandedRow {
+  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+}
+
+.requestEventsExpandedCell {
+  padding: 0 !important;
+}
+
+.requestEventsExpandedPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.requestEventsExpandedGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.requestEventsDetailItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+}
+
+.requestEventsDetailLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.requestEventsDetailValue {
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.requestEventsDetailCode {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+}
+
+.requestEventsAdditionalSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.requestEventsAdditionalTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
 }
 
 .chartLineHeader {

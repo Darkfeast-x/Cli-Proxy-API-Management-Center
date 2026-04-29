@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -12,7 +12,8 @@ import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver
 import { parseTimestampMs } from '@/utils/timestamp';
 import {
   calculateCost,
-  collectUsageDetails,
+  collectUsageDetailsWithEndpoint,
+  obfuscateUsageDisplayValue,
   extractLatencyMs,
   extractTotalTokens,
   formatDurationMs,
@@ -26,6 +27,163 @@ import styles from '@/pages/UsagePage.module.scss';
 
 const ALL_FILTER = '__all__';
 const MAX_RENDERED_EVENTS = 500;
+const DETAIL_FIELD_NOT_AVAILABLE = '-';
+const REQUEST_DETAIL_STATUS_PATHS: ReadonlyArray<readonly string[]> = [
+  ['status'],
+  ['request_status'],
+  ['requestStatus'],
+  ['state'],
+  ['result'],
+  ['response', 'statusText'],
+  ['response', 'status_text'],
+  ['response', 'state'],
+  ['response', 'result']
+];
+const REQUEST_DETAIL_STATUS_CODE_PATHS: ReadonlyArray<readonly string[]> = [
+  ['status_code'],
+  ['statusCode'],
+  ['http_status'],
+  ['httpStatus'],
+  ['response_status'],
+  ['responseStatus'],
+  ['response', 'status'],
+  ['response', 'statusCode'],
+  ['response', 'status_code'],
+  ['response', 'httpStatus'],
+  ['response', 'http_status'],
+  ['response', 'code']
+];
+const REQUEST_DETAIL_REASONING_PATHS: ReadonlyArray<readonly string[]> = [
+  ['reasoning_effort'],
+  ['reasoningEffort'],
+  ['effort'],
+  ['reasoning', 'effort'],
+  ['thinking', 'effort'],
+  ['metadata', 'reasoning_effort'],
+  ['metadata', 'reasoningEffort'],
+  ['metadata', 'effort'],
+  ['request', 'reasoning_effort'],
+  ['request', 'reasoningEffort'],
+  ['request', 'effort'],
+  ['request', 'reasoning', 'effort'],
+  ['request', 'thinking', 'effort'],
+  ['request', 'body', 'reasoning_effort'],
+  ['request', 'body', 'reasoningEffort'],
+  ['request', 'body', 'effort'],
+  ['request', 'body', 'reasoning', 'effort'],
+  ['request', 'payload', 'reasoning_effort'],
+  ['request', 'payload', 'reasoningEffort'],
+  ['request', 'payload', 'effort'],
+  ['request', 'payload', 'reasoning', 'effort'],
+  ['body', 'reasoning_effort'],
+  ['body', 'reasoningEffort'],
+  ['body', 'effort'],
+  ['body', 'reasoning', 'effort'],
+  ['payload', 'reasoning_effort'],
+  ['payload', 'reasoningEffort'],
+  ['payload', 'effort'],
+  ['payload', 'reasoning', 'effort'],
+  ['response', 'reasoning_effort'],
+  ['response', 'reasoningEffort'],
+  ['response', 'effort'],
+  ['response', 'reasoning', 'effort'],
+  ['response', 'thinking', 'effort'],
+  ['response', 'body', 'reasoning_effort'],
+  ['response', 'body', 'reasoningEffort'],
+  ['response', 'body', 'effort'],
+  ['response', 'body', 'reasoning', 'effort']
+];
+const REQUEST_DETAIL_SERVICE_TIER_PATHS: ReadonlyArray<readonly string[]> = [
+  ['service_tier'],
+  ['serviceTier'],
+  ['tier'],
+  ['metadata', 'service_tier'],
+  ['metadata', 'serviceTier'],
+  ['request', 'service_tier'],
+  ['request', 'serviceTier'],
+  ['request', 'body', 'service_tier'],
+  ['request', 'body', 'serviceTier'],
+  ['request', 'payload', 'service_tier'],
+  ['request', 'payload', 'serviceTier'],
+  ['body', 'service_tier'],
+  ['body', 'serviceTier'],
+  ['payload', 'service_tier'],
+  ['payload', 'serviceTier'],
+  ['response', 'service_tier'],
+  ['response', 'serviceTier'],
+  ['response', 'body', 'service_tier'],
+  ['response', 'body', 'serviceTier']
+];
+const REQUEST_DETAIL_ENDPOINT_VALUE_PATHS: ReadonlyArray<readonly string[]> = [
+  ['endpoint'],
+  ['url'],
+  ['request', 'endpoint'],
+  ['request', 'url'],
+  ['request', 'uri'],
+  ['request', 'path'],
+  ['request', 'pathname'],
+  ['request', 'body', 'endpoint'],
+  ['request', 'body', 'path'],
+  ['request', 'payload', 'endpoint'],
+  ['request', 'payload', 'path']
+];
+const REQUEST_DETAIL_REQUEST_PATH_PATHS: ReadonlyArray<readonly string[]> = [
+  ['path'],
+  ['request', 'path'],
+  ['url'],
+  ['request', 'url'],
+  ['request', 'uri'],
+  ['request', 'route'],
+  ['request', 'pathname'],
+  ['request', 'body', 'path'],
+  ['request', 'payload', 'path']
+];
+const REQUEST_DETAIL_REQUEST_METHOD_PATHS: ReadonlyArray<readonly string[]> = [
+  ['method'],
+  ['request_method'],
+  ['requestMethod'],
+  ['request', 'method'],
+  ['request', 'http_method'],
+  ['request', 'httpMethod'],
+  ['request', 'verb'],
+  ['request', 'body', 'method'],
+  ['request', 'payload', 'method']
+];
+const REQUEST_DETAIL_EXCLUDED_KEYS = new Set([
+  'timestamp',
+  'source',
+  'auth_index',
+  'authIndex',
+  'AuthIndex',
+  'failed',
+  'tokens',
+  'latency_ms',
+  'latencyMs',
+  'method',
+  'request_method',
+  'requestMethod',
+  'status',
+  'request_status',
+  'requestStatus',
+  'state',
+  'result',
+  'status_code',
+  'statusCode',
+  'http_status',
+  'httpStatus',
+  'response_status',
+  'responseStatus',
+  'reasoning_effort',
+  'reasoningEffort',
+  'effort',
+  'service_tier',
+  'serviceTier',
+  'tier',
+  'endpoint',
+  'path',
+  'url'
+]);
+const REQUEST_DETAIL_MAX_ADDITIONAL_DEPTH = 3;
 
 type RequestEventRow = {
   id: string;
@@ -34,7 +192,8 @@ type RequestEventRow = {
   timestampLabel: string;
   model: string;
   sourceKey: string;
-  sourceRaw: string;
+  sourceRaw: string | null;
+  sourceRawDisplay: string;
   source: string;
   sourceType: string;
   authIndex: string;
@@ -46,6 +205,22 @@ type RequestEventRow = {
   cachedTokens: number;
   totalTokens: number;
   cost: number;
+  endpoint: string | null;
+  endpointDisplay: string;
+  endpointMethod: string;
+  endpointPath: string | null;
+  endpointPathDisplay: string;
+  rawStatus: string;
+  statusCode: string;
+  reasoningEffort: string;
+  serviceTier: string;
+  additionalFields: RequestEventDetailField[];
+};
+
+type RequestEventDetailField = {
+  key: string;
+  label: string;
+  value: string;
 };
 
 export interface RequestEventsDetailsCardProps {
@@ -59,10 +234,185 @@ export interface RequestEventsDetailsCardProps {
   modelPrices: Record<string, ModelPrice>;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 const toNumber = (value: unknown): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return parsed;
+};
+
+const normalizeOptionalDetailValue = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
+
+const withDetailFallback = (value: string | null | undefined) => value ?? DETAIL_FIELD_NOT_AVAILABLE;
+
+const toDisplayValue = (value: unknown): string | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => toDisplayValue(item))
+      .filter((item): item is string => Boolean(item));
+    return parts.length ? parts.join(', ') : null;
+  }
+
+  if (isRecord(value)) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
+};
+
+const getValueAtPath = (record: Record<string, unknown>, path: readonly string[]): unknown => {
+  let current: unknown = record;
+  for (const segment of path) {
+    if (!isRecord(current) || !(segment in current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+};
+
+const getFirstDisplayValue = (
+  record: Record<string, unknown> | null,
+  paths: ReadonlyArray<readonly string[]>
+): string | null => {
+  if (!record) {
+    return null;
+  }
+
+  for (const path of paths) {
+    const displayValue = toDisplayValue(getValueAtPath(record, path));
+    if (displayValue) {
+      return displayValue;
+    }
+  }
+
+  return null;
+};
+
+const normalizeReasoningEffort = (value: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'medim') {
+    return 'medium';
+  }
+
+  if (normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'xhigh') {
+    return normalized;
+  }
+
+  return value;
+};
+
+const formatFieldLabel = (key: string) =>
+  key
+    .replace(/\./g, ' / ')
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const SENSITIVE_REQUEST_DETAIL_KEY_REGEX = /(source|path|url|endpoint|token|authorization|secret|key|email)/i;
+
+const maskDetailFieldValue = (pathKey: string, value: string) => {
+  if (!SENSITIVE_REQUEST_DETAIL_KEY_REGEX.test(pathKey)) {
+    return value;
+  }
+
+  const kind = /source|email/i.test(pathKey)
+    ? 'source'
+    : /path|url|endpoint/i.test(pathKey)
+      ? 'path'
+      : 'generic';
+
+  return obfuscateUsageDisplayValue(value, { kind });
+};
+
+const buildAdditionalFields = (rawDetail: Record<string, unknown>): RequestEventDetailField[] => {
+  const fields: RequestEventDetailField[] = [];
+  const seen = new Set<string>();
+
+  const addField = (pathKey: string, value: unknown) => {
+    const leafKey = pathKey.split('.').pop() ?? pathKey;
+    if (REQUEST_DETAIL_EXCLUDED_KEYS.has(pathKey) || REQUEST_DETAIL_EXCLUDED_KEYS.has(leafKey)) {
+      return;
+    }
+
+    const displayValue = toDisplayValue(value);
+    if (!displayValue) {
+      return;
+    }
+
+    const normalizedKey = pathKey.toLowerCase();
+    if (seen.has(normalizedKey)) {
+      return;
+    }
+    seen.add(normalizedKey);
+
+    fields.push({
+      key: pathKey,
+      label: formatFieldLabel(pathKey),
+      value: maskDetailFieldValue(pathKey, displayValue)
+    });
+  };
+
+  const collectFields = (pathKey: string, value: unknown, depth: number) => {
+    const leafKey = pathKey.split('.').pop() ?? pathKey;
+    if (REQUEST_DETAIL_EXCLUDED_KEYS.has(pathKey) || REQUEST_DETAIL_EXCLUDED_KEYS.has(leafKey)) {
+      return;
+    }
+
+    if (isRecord(value) && depth < REQUEST_DETAIL_MAX_ADDITIONAL_DEPTH) {
+      Object.entries(value).forEach(([nestedKey, nestedValue]) => {
+        collectFields(`${pathKey}.${nestedKey}`, nestedValue, depth + 1);
+      });
+      return;
+    }
+
+    addField(pathKey, value);
+  };
+
+  Object.entries(rawDetail).forEach(([key, value]) => {
+    if (REQUEST_DETAIL_EXCLUDED_KEYS.has(key)) {
+      return;
+    }
+
+    if (isRecord(value)) {
+      collectFields(key, value, 1);
+      return;
+    }
+
+    addField(key, value);
+  });
+
+  return fields.sort((left, right) => left.label.localeCompare(right.label));
 };
 
 const encodeCsv = (value: string | number): string => {
@@ -92,6 +442,7 @@ export function RequestEventsDetailsCard({
   const [sourceFilter, setSourceFilter] = useState(ALL_FILTER);
   const [authIndexFilter, setAuthIndexFilter] = useState(ALL_FILTER);
   const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
+  const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -131,7 +482,7 @@ export function RequestEventsDetailsCard({
   );
 
   const rows = useMemo<RequestEventRow[]>(() => {
-    const details = collectUsageDetails(usage);
+    const details = collectUsageDetailsWithEndpoint(usage);
 
     const baseRows = details.map((detail, index) => {
       const timestamp = detail.timestamp;
@@ -140,15 +491,15 @@ export function RequestEventsDetailsCard({
           ? detail.__timestampMs
           : parseTimestampMs(timestamp);
       const date = Number.isNaN(timestampMs) ? null : new Date(timestampMs);
-      const sourceRaw = String(detail.source ?? '').trim();
+      const normalizedSource = String(detail.source ?? '').trim();
       const authIndexRaw = detail.auth_index as unknown;
       const authIndex =
         authIndexRaw === null || authIndexRaw === undefined || authIndexRaw === ''
           ? '-'
           : String(authIndexRaw);
-      const sourceInfo = resolveSourceDisplay(sourceRaw, authIndexRaw, sourceInfoMap, authFileMap);
+      const sourceInfo = resolveSourceDisplay(normalizedSource, authIndexRaw, sourceInfoMap, authFileMap);
       const source = sourceInfo.displayName;
-      const sourceKey = sourceInfo.identityKey ?? `source:${sourceRaw || source}`;
+      const sourceKey = sourceInfo.identityKey ?? `source:${normalizedSource || source}`;
       const sourceType = sourceInfo.type;
       const model = String(detail.__modelName ?? '').trim() || '-';
       const inputTokens = Math.max(toNumber(detail.tokens?.input_tokens), 0);
@@ -161,6 +512,44 @@ export function RequestEventsDetailsCard({
       const totalTokens = Math.max(toNumber(detail.tokens?.total_tokens), extractTotalTokens(detail));
       const latencyMs = extractLatencyMs(detail);
       const cost = calculateCost(detail, modelPrices);
+      const rawDetail = isRecord(detail.__rawDetail) ? detail.__rawDetail : null;
+      const hasStructuredEndpoint = Boolean(detail.__endpointMethod?.trim() || detail.__endpointPath?.trim());
+      const endpoint = normalizeOptionalDetailValue(
+        getFirstDisplayValue(rawDetail, REQUEST_DETAIL_ENDPOINT_VALUE_PATHS) ||
+          (hasStructuredEndpoint ? detail.__endpoint?.trim() : null)
+      );
+      const endpointDisplay = withDetailFallback(
+        endpoint ? obfuscateUsageDisplayValue(endpoint, { kind: 'endpoint' }) : null
+      );
+      const endpointMethod = normalizeOptionalDetailValue(
+        getFirstDisplayValue(rawDetail, REQUEST_DETAIL_REQUEST_METHOD_PATHS) || detail.__endpointMethod?.trim()
+      )?.toUpperCase();
+      const endpointPath = normalizeOptionalDetailValue(
+        getFirstDisplayValue(rawDetail, REQUEST_DETAIL_REQUEST_PATH_PATHS) ||
+          (hasStructuredEndpoint ? detail.__endpointPath?.trim() : null)
+      );
+      const endpointPathDisplay = withDetailFallback(
+        endpointPath ? obfuscateUsageDisplayValue(endpointPath, { kind: 'path' }) : null
+      );
+      const rawStatus = withDetailFallback(
+        normalizeOptionalDetailValue(getFirstDisplayValue(rawDetail, REQUEST_DETAIL_STATUS_PATHS))
+      );
+      const statusCode = withDetailFallback(
+        normalizeOptionalDetailValue(getFirstDisplayValue(rawDetail, REQUEST_DETAIL_STATUS_CODE_PATHS))
+      );
+      const reasoningEffort = withDetailFallback(
+        normalizeReasoningEffort(
+          normalizeOptionalDetailValue(getFirstDisplayValue(rawDetail, REQUEST_DETAIL_REASONING_PATHS))
+        )
+      );
+      const serviceTier = withDetailFallback(
+        normalizeOptionalDetailValue(getFirstDisplayValue(rawDetail, REQUEST_DETAIL_SERVICE_TIER_PATHS))
+      );
+      const additionalFields = rawDetail ? buildAdditionalFields(rawDetail) : [];
+      const sourceRaw = normalizeOptionalDetailValue(toDisplayValue(rawDetail?.source));
+      const sourceRawDisplay = withDetailFallback(
+        sourceRaw ? obfuscateUsageDisplayValue(sourceRaw, { kind: 'source' }) : null
+      );
 
       return {
         id: `${timestamp}-${model}-${sourceKey}-${authIndex}-${index}`,
@@ -169,7 +558,8 @@ export function RequestEventsDetailsCard({
         timestampLabel: date ? date.toLocaleString(i18n.language) : timestamp || '-',
         model,
         sourceKey,
-        sourceRaw: sourceRaw || '-',
+        sourceRaw,
+        sourceRawDisplay,
         source,
         sourceType,
         authIndex,
@@ -180,7 +570,17 @@ export function RequestEventsDetailsCard({
         reasoningTokens,
         cachedTokens,
         totalTokens,
-        cost
+        cost,
+        endpoint,
+        endpointDisplay,
+        endpointMethod: withDetailFallback(endpointMethod),
+        endpointPath,
+        endpointPathDisplay,
+        rawStatus,
+        statusCode,
+        reasoningEffort,
+        serviceTier,
+        additionalFields
       };
     });
 
@@ -199,10 +599,6 @@ export function RequestEventsDetailsCard({
 
       if (row.authIndex !== '-') {
         return `${row.source} · ${row.authIndex}`;
-      }
-
-      if (row.sourceRaw !== '-' && row.sourceRaw !== row.source) {
-        return `${row.source} · ${row.sourceRaw}`;
       }
 
       if (row.sourceType) {
@@ -290,6 +686,7 @@ export function RequestEventsDetailsCard({
   );
 
   const renderedRows = useMemo(() => filteredRows.slice(0, MAX_RENDERED_EVENTS), [filteredRows]);
+  const detailColumnCount = hasLatencyData ? 12 : 11;
 
   const hasActiveFilters =
     effectiveModelFilter !== ALL_FILTER ||
@@ -300,6 +697,26 @@ export function RequestEventsDetailsCard({
     setModelFilter(ALL_FILTER);
     setSourceFilter(ALL_FILTER);
     setAuthIndexFilter(ALL_FILTER);
+  };
+
+  useEffect(() => {
+    const visibleIds = new Set(renderedRows.map((row) => row.id));
+    setExpandedRowIds((prev) => {
+      const nextIds = Array.from(prev).filter((id) => visibleIds.has(id));
+      return nextIds.length === prev.size ? prev : new Set(nextIds);
+    });
+  }, [renderedRows]);
+
+  const toggleExpandedRow = (rowId: string) => {
+    setExpandedRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) {
+        next.delete(rowId);
+      } else {
+        next.add(rowId);
+      }
+      return next;
+    });
   };
 
   const handleExportCsv = () => {
@@ -326,7 +743,7 @@ export function RequestEventsDetailsCard({
         row.timestamp,
         row.model,
         row.source,
-        row.sourceRaw,
+        row.sourceRaw ?? '',
         row.authIndex,
         row.failed ? 'failed' : 'success',
         ...(hasLatencyData ? [row.latencyMs ?? ''] : []),
@@ -356,7 +773,7 @@ export function RequestEventsDetailsCard({
       timestamp: row.timestamp,
       model: row.model,
       source: row.source,
-      source_raw: row.sourceRaw,
+      source_raw: row.sourceRaw ?? '',
       auth_index: row.authIndex,
       failed: row.failed,
       ...(hasLatencyData && row.latencyMs !== null ? { latency_ms: row.latencyMs } : {}),
@@ -376,6 +793,29 @@ export function RequestEventsDetailsCard({
       filename: `usage-events-${fileTime}.json`,
       blob: new Blob([content], { type: 'application/json;charset=utf-8' })
     });
+  };
+
+  const renderDetailTextItem = (
+    label: string,
+    value: string,
+    options: {
+      code?: boolean;
+      title?: string;
+    } = {}
+  ) => {
+    return (
+      <div className={styles.requestEventsDetailItem}>
+        <span className={styles.requestEventsDetailLabel}>{label}</span>
+        <span
+          className={`${styles.requestEventsDetailValue} ${
+            options.code ? styles.requestEventsDetailCode : ''
+          }`.trim()}
+          title={options.title ?? value}
+        >
+          {value}
+        </span>
+      </div>
+    );
   };
 
   return (
@@ -479,41 +919,137 @@ export function RequestEventsDetailsCard({
                 </tr>
               </thead>
               <tbody>
-                {renderedRows.map((row) => (
-                  <tr key={row.id}>
-                    <td title={row.timestamp} className={styles.requestEventsTimestamp}>
-                      {row.timestampLabel}
-                    </td>
-                    <td className={styles.modelCell}>{row.model}</td>
-                    <td className={styles.requestEventsSourceCell} title={row.source}>
-                      <span>{row.source}</span>
-                      {row.sourceType && <span className={styles.credentialType}>{row.sourceType}</span>}
-                    </td>
-                    <td className={styles.requestEventsAuthIndex} title={row.authIndex}>
-                      {row.authIndex}
-                    </td>
-                    <td>
-                      <span
-                        className={
-                          row.failed
-                            ? styles.requestEventsResultFailed
-                            : styles.requestEventsResultSuccess
-                        }
+                {renderedRows.map((row) => {
+                  const isExpanded = expandedRowIds.has(row.id);
+
+                  return (
+                    <Fragment key={row.id}>
+                      <tr
+                        className={`${styles.requestEventsSummaryRow} ${
+                          isExpanded ? styles.requestEventsSummaryRowExpanded : ''
+                        }`}
+                        onClick={() => toggleExpandedRow(row.id)}
                       >
-                        {row.failed ? t('stats.failure') : t('stats.success')}
-                      </span>
-                    </td>
-                    {hasLatencyData && <td className={styles.durationCell}>{formatDurationMs(row.latencyMs)}</td>}
-                    <td className={styles.requestEventsCost}>
-                      {row.cost > 0 ? formatUsd(row.cost) : '--'}
-                    </td>
-                    <td>{row.inputTokens.toLocaleString()}</td>
-                    <td>{row.outputTokens.toLocaleString()}</td>
-                    <td>{row.reasoningTokens.toLocaleString()}</td>
-                    <td>{row.cachedTokens.toLocaleString()}</td>
-                    <td>{row.totalTokens.toLocaleString()}</td>
-                  </tr>
-                ))}
+                        <td title={row.timestamp} className={styles.requestEventsTimestamp}>
+                          <button
+                            type="button"
+                            className={styles.requestEventsToggleButton}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleExpandedRow(row.id);
+                            }}
+                            aria-expanded={isExpanded}
+                            title={
+                              isExpanded
+                                ? t('usage_stats.request_events_detail_collapse')
+                                : t('usage_stats.request_events_detail_expand')
+                            }
+                          >
+                            <span className={styles.requestEventsToggleIndicator}>
+                              {isExpanded ? '▼' : '▶'}
+                            </span>
+                            <span className={styles.requestEventsToggleText}>{row.timestampLabel}</span>
+                          </button>
+                        </td>
+                        <td className={styles.modelCell}>{row.model}</td>
+                        <td className={styles.requestEventsSourceCell} title={row.source}>
+                          <span>{row.source}</span>
+                          {row.sourceType && <span className={styles.credentialType}>{row.sourceType}</span>}
+                        </td>
+                        <td className={styles.requestEventsAuthIndex} title={row.authIndex}>
+                          {row.authIndex}
+                        </td>
+                        <td>
+                          <span
+                            className={
+                              row.failed
+                                ? styles.requestEventsResultFailed
+                                : styles.requestEventsResultSuccess
+                            }
+                          >
+                            {row.failed ? t('stats.failure') : t('stats.success')}
+                          </span>
+                        </td>
+                        {hasLatencyData && <td className={styles.durationCell}>{formatDurationMs(row.latencyMs)}</td>}
+                        <td className={styles.requestEventsCost}>
+                          {row.cost > 0 ? formatUsd(row.cost) : '--'}
+                        </td>
+                        <td>{row.inputTokens.toLocaleString()}</td>
+                        <td>{row.outputTokens.toLocaleString()}</td>
+                        <td>{row.reasoningTokens.toLocaleString()}</td>
+                        <td>{row.cachedTokens.toLocaleString()}</td>
+                        <td>{row.totalTokens.toLocaleString()}</td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr className={styles.requestEventsExpandedRow}>
+                          <td colSpan={detailColumnCount} className={styles.requestEventsExpandedCell}>
+                            <div className={styles.requestEventsExpandedPanel}>
+                              <div className={styles.requestEventsExpandedGrid}>
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_status'),
+                                  row.rawStatus
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_status_code'),
+                                  row.statusCode
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_reasoning_effort'),
+                                  row.reasoningEffort
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_endpoint'),
+                                  row.endpointDisplay,
+                                  { code: true }
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_source_raw'),
+                                  row.sourceRawDisplay,
+                                  { code: true }
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_service_tier'),
+                                  row.serviceTier
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_request_path'),
+                                  row.endpointPathDisplay,
+                                  { code: true }
+                                )}
+                                {renderDetailTextItem(
+                                  t('usage_stats.request_events_detail_request_method'),
+                                  row.endpointMethod
+                                )}
+                              </div>
+
+                              {row.additionalFields.length > 0 && (
+                                <div className={styles.requestEventsAdditionalSection}>
+                                  <div className={styles.requestEventsAdditionalTitle}>
+                                    {t('usage_stats.request_events_detail_additional')}
+                                  </div>
+                                  <div className={styles.requestEventsExpandedGrid}>
+                                    {row.additionalFields.map((field) => (
+                                      <div key={`${row.id}-${field.key}`} className={styles.requestEventsDetailItem}>
+                                        <span className={styles.requestEventsDetailLabel}>{field.label}</span>
+                                        <span
+                                          className={`${styles.requestEventsDetailValue} ${styles.requestEventsDetailCode}`}
+                                          title={field.value}
+                                        >
+                                          {field.value}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

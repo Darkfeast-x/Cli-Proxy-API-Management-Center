@@ -1045,7 +1045,19 @@
     "provider_filter": "Provider",
     "search_filter": "Поиск",
     "search_placeholder": "Поиск по моделям, источникам, auth-файлам и providers",
-    "request_events_cost": "Стоимость"
+    "request_events_cost": "Стоимость",
+    "request_events_detail_expand": "Развернуть детали",
+    "request_events_detail_collapse": "Свернуть детали",
+    "request_events_detail_result": "Результат запроса",
+    "request_events_detail_status": "Статус",
+    "request_events_detail_status_code": "Код статуса",
+    "request_events_detail_reasoning_effort": "Уровень рассуждения",
+    "request_events_detail_endpoint": "Эндпоинт",
+    "request_events_detail_request_method": "Метод запроса",
+    "request_events_detail_request_path": "Путь запроса",
+    "request_events_detail_source_raw": "Исходный источник",
+    "request_events_detail_service_tier": "Уровень сервиса",
+    "request_events_detail_additional": "Дополнительные поля"
   },
   "stats": {
     "success": "Успех",

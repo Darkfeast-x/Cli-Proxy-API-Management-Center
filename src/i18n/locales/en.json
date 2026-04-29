@@ -1048,7 +1048,19 @@
     "provider_filter": "Provider",
     "search_filter": "Search",
     "search_placeholder": "Search models, sources, auth files, or providers",
-    "request_events_cost": "Cost"
+    "request_events_cost": "Cost",
+    "request_events_detail_expand": "Expand details",
+    "request_events_detail_collapse": "Collapse details",
+    "request_events_detail_result": "Request Result",
+    "request_events_detail_status": "Status",
+    "request_events_detail_status_code": "Status Code",
+    "request_events_detail_reasoning_effort": "Reasoning Effort",
+    "request_events_detail_endpoint": "Endpoint",
+    "request_events_detail_request_method": "Request Method",
+    "request_events_detail_request_path": "Request Path",
+    "request_events_detail_source_raw": "Raw Source",
+    "request_events_detail_service_tier": "Service Tier",
+    "request_events_detail_additional": "Additional Fields"
   },
   "stats": {
     "success": "Success",
