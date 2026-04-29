@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { HttpMethod, ParsedLogLine, StatusGroup } from './logTypes';
 import { resolveStatusGroup } from './logTypes';
 
@@ -23,6 +23,11 @@ interface UseLogFiltersReturn {
   toggleStatusFilter: (group: StatusGroup) => void;
   togglePathFilter: (path: string) => void;
   clearStructuredFilters: () => void;
+  replaceStructuredFilters: (filters: {
+    methods?: HttpMethod[];
+    statuses?: StatusGroup[];
+    paths?: string[];
+  }) => void;
 }
 
 export function useLogFilters(options: UseLogFiltersOptions): UseLogFiltersReturn {
@@ -63,13 +68,29 @@ export function useLogFilters(options: UseLogFiltersOptions): UseLogFiltersRetur
       if (!line.path) return;
       counts.set(line.path, (counts.get(line.path) ?? 0) + 1);
     });
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .slice(0, PATH_FILTER_LIMIT)
-      .map(([path, count]) => ({ path, count }));
-  }, [parsedLines]);
+    const sortedEntries = Array.from(counts.entries()).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+    );
+    const optionEntries = sortedEntries.slice(0, PATH_FILTER_LIMIT);
+
+    sortedEntries.forEach(([path, count]) => {
+      if (!pathFilterSet.has(path)) {
+        return;
+      }
+      if (optionEntries.some(([existingPath]) => existingPath === path)) {
+        return;
+      }
+      optionEntries.push([path, count]);
+    });
+
+    return optionEntries.map(([path, count]) => ({ path, count }));
+  }, [parsedLines, pathFilterSet]);
 
   useEffect(() => {
+    if (parsedLines.length === 0) {
+      return;
+    }
+
     const validPathSet = new Set(pathOptions.map((item) => item.path));
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPathFilters((prev) => {
@@ -77,31 +98,40 @@ export function useLogFilters(options: UseLogFiltersOptions): UseLogFiltersRetur
       const next = prev.filter((path) => validPathSet.has(path));
       return next.length === prev.length ? prev : next;
     });
-  }, [pathOptions]);
+  }, [parsedLines.length, pathOptions]);
 
-  const toggleMethodFilter = (method: HttpMethod) => {
+  const toggleMethodFilter = useCallback((method: HttpMethod) => {
     setMethodFilters((prev) =>
       prev.includes(method) ? prev.filter((item) => item !== method) : [...prev, method]
     );
-  };
+  }, []);
 
-  const toggleStatusFilter = (group: StatusGroup) => {
+  const toggleStatusFilter = useCallback((group: StatusGroup) => {
     setStatusFilters((prev) =>
       prev.includes(group) ? prev.filter((item) => item !== group) : [...prev, group]
     );
-  };
+  }, []);
 
-  const togglePathFilter = (path: string) => {
+  const togglePathFilter = useCallback((path: string) => {
     setPathFilters((prev) =>
       prev.includes(path) ? prev.filter((item) => item !== path) : [...prev, path]
     );
-  };
+  }, []);
 
-  const clearStructuredFilters = () => {
+  const clearStructuredFilters = useCallback(() => {
     setMethodFilters([]);
     setStatusFilters([]);
     setPathFilters([]);
-  };
+  }, []);
+
+  const replaceStructuredFilters = useCallback(
+    (filters: { methods?: HttpMethod[]; statuses?: StatusGroup[]; paths?: string[] }) => {
+      setMethodFilters(Array.from(new Set(filters.methods ?? [])));
+      setStatusFilters(Array.from(new Set(filters.statuses ?? [])));
+      setPathFilters(Array.from(new Set(filters.paths ?? [])));
+    },
+    []
+  );
 
   return {
     methodFilters,
@@ -118,5 +148,6 @@ export function useLogFilters(options: UseLogFiltersOptions): UseLogFiltersRetur
     toggleStatusFilter,
     togglePathFilter,
     clearStructuredFilters,
+    replaceStructuredFilters
   };
 }

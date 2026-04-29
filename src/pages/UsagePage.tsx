@@ -29,6 +29,7 @@ import {
   ModelStatsCard,
   PriceSettingsCard,
   CredentialStatsCard,
+  TopAnomaliesCard,
   RequestEventsDetailsCard,
   TokenBreakdownChart,
   CostTrendChart,
@@ -274,10 +275,31 @@ export function UsagePage() {
     [t]
   );
 
+  const effectiveNowMs = lastRefreshedAt?.getTime() ?? Date.now();
+
   const baseUsage = useMemo(
-    () => (usage ? filterUsageByTimeRange(usage, timeRange) : null),
-    [usage, timeRange]
+    () => (usage ? filterUsageByTimeRange(usage, timeRange, effectiveNowMs) : null),
+    [effectiveNowMs, timeRange, usage]
   );
+
+  const previousBaseUsage = useMemo(() => {
+    if (!usage || timeRange === 'all') {
+      return null;
+    }
+
+    const rangeMs = HOUR_WINDOW_BY_TIME_RANGE[timeRange] * 60 * 60 * 1000;
+    const previousWindowEndMs = effectiveNowMs - rangeMs;
+    const previousWindowStartMs = previousWindowEndMs - rangeMs;
+
+    return filterUsageByDetail(usage, (detail) => {
+      const timestampMs = detail.__timestampMs ?? 0;
+      return (
+        Number.isFinite(timestampMs) &&
+        timestampMs >= previousWindowStartMs &&
+        timestampMs <= previousWindowEndMs
+      );
+    });
+  }, [effectiveNowMs, timeRange, usage]);
 
   const authOptions = useMemo(() => {
     const optionMap = new Map<string, string>();
@@ -366,59 +388,79 @@ export function UsagePage() {
     }
   }, [effectiveSelectedProvider, selectedProvider]);
 
+  const applyUsageFilters = useCallback(
+    (inputUsage: typeof baseUsage) => {
+      if (!inputUsage) {
+        return null;
+      }
+
+      if (
+        effectiveSelectedAuth === ALL_FILTER &&
+        effectiveSelectedProvider === ALL_FILTER &&
+        !normalizedSearch
+      ) {
+        return inputUsage;
+      }
+
+      return filterUsageByDetail(inputUsage, (detail, context) => {
+        const sourceInfo = resolveSourceDisplay(
+          detail.source ?? '',
+          detail.auth_index,
+          sourceInfoMap,
+          authFileMap
+        );
+        const providerInfo = getProviderFilterInfo(sourceInfo);
+        const authKey = normalizeAuthIndex(detail.auth_index);
+        const authInfo = authKey ? authFileMap.get(authKey) : null;
+
+        if (effectiveSelectedAuth !== ALL_FILTER && authKey !== effectiveSelectedAuth) {
+          return false;
+        }
+
+        if (effectiveSelectedProvider !== ALL_FILTER && providerInfo.key !== effectiveSelectedProvider) {
+          return false;
+        }
+
+        if (!normalizedSearch) {
+          return true;
+        }
+
+        return [
+          context.modelName,
+          context.apiName,
+          sourceInfo.displayName,
+          sourceInfo.type,
+          sourceInfo.identityKey || '',
+          providerInfo.label,
+          providerInfo.key,
+          detail.source || '',
+          authKey || '',
+          authInfo?.name || '',
+          authInfo?.type || ''
+        ].some((value) => String(value || '').toLowerCase().includes(normalizedSearch));
+      });
+    },
+    [
+      authFileMap,
+      effectiveSelectedAuth,
+      effectiveSelectedProvider,
+      normalizedSearch,
+      sourceInfoMap
+    ]
+  );
+
   const filteredUsage = useMemo(() => {
     if (!baseUsage) {
       return null;
     }
 
-    if (
-      effectiveSelectedAuth === ALL_FILTER &&
-      effectiveSelectedProvider === ALL_FILTER &&
-      !normalizedSearch
-    ) {
-      return baseUsage;
-    }
+    return applyUsageFilters(baseUsage);
+  }, [applyUsageFilters, baseUsage]);
 
-    return filterUsageByDetail(baseUsage, (detail, context) => {
-      const sourceInfo = resolveSourceDisplay(detail.source ?? '', detail.auth_index, sourceInfoMap, authFileMap);
-      const providerInfo = getProviderFilterInfo(sourceInfo);
-      const authKey = normalizeAuthIndex(detail.auth_index);
-      const authInfo = authKey ? authFileMap.get(authKey) : null;
-
-      if (effectiveSelectedAuth !== ALL_FILTER && authKey !== effectiveSelectedAuth) {
-        return false;
-      }
-
-      if (effectiveSelectedProvider !== ALL_FILTER && providerInfo.key !== effectiveSelectedProvider) {
-        return false;
-      }
-
-      if (!normalizedSearch) {
-        return true;
-      }
-
-      return [
-        context.modelName,
-        context.apiName,
-        sourceInfo.displayName,
-        sourceInfo.type,
-        sourceInfo.identityKey || '',
-        providerInfo.label,
-        providerInfo.key,
-        detail.source || '',
-        authKey || '',
-        authInfo?.name || '',
-        authInfo?.type || ''
-      ].some((value) => String(value || '').toLowerCase().includes(normalizedSearch));
-    });
-  }, [
-    authFileMap,
-    baseUsage,
-    effectiveSelectedAuth,
-    effectiveSelectedProvider,
-    normalizedSearch,
-    sourceInfoMap
-  ]);
+  const previousFilteredUsage = useMemo(
+    () => applyUsageFilters(previousBaseUsage),
+    [applyUsageFilters, previousBaseUsage]
+  );
 
   const filteredModelNames = useMemo(() => getModelNamesFromUsage(filteredUsage), [filteredUsage]);
   const hourWindowHours = timeRange === 'all' ? undefined : HOUR_WINDOW_BY_TIME_RANGE[timeRange];
@@ -460,6 +502,8 @@ export function UsagePage() {
   }, [timeRange]);
 
   const nowMs = lastRefreshedAt?.getTime() ?? 0;
+  const comparisonNowMs =
+    timeRange === 'all' ? 0 : effectiveNowMs - HOUR_WINDOW_BY_TIME_RANGE[timeRange] * 60 * 60 * 1000;
 
   const {
     requestsSparkline,
@@ -588,9 +632,12 @@ export function UsagePage() {
 
       <StatCards
         usage={filteredUsage}
+        previousUsage={previousFilteredUsage}
         loading={loading}
         modelPrices={modelPrices}
         nowMs={nowMs}
+        previousNowMs={comparisonNowMs}
+        comparisonEnabled={timeRange !== 'all'}
         sparklines={{
           requests: requestsSparkline,
           tokens: tokensSparkline,
@@ -619,6 +666,13 @@ export function UsagePage() {
       />
 
       <ServiceHealthCard usage={usage} loading={loading} />
+
+      <TopAnomaliesCard
+        usage={filteredUsage}
+        loading={loading}
+        modelPrices={modelPrices}
+        hasPrices={hasPrices}
+      />
 
       <div className={styles.chartsGrid}>
         <UsageChart

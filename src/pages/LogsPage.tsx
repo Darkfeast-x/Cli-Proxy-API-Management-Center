@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -28,10 +29,12 @@ import { copyToClipboard } from '@/utils/clipboard';
 import { downloadBlob } from '@/utils/download';
 import { MANAGEMENT_API_PREFIX } from '@/utils/constants';
 import { formatUnixTimestamp } from '@/utils/format';
+import { readUsageLogsJump } from '@/utils/logsJump';
 import {
   HTTP_METHODS,
   STATUS_GROUPS,
   resolveStatusGroup,
+  type HttpMethod,
   type LogState,
 } from './hooks/logTypes';
 import { parseLogLine } from './hooks/logParsing';
@@ -66,6 +69,7 @@ type TabType = 'logs' | 'errors';
 
 export function LogsPage() {
   const { t } = useTranslation();
+  const [searchParams] = useSearchParams();
   const { showNotification, showConfirmation } = useNotificationStore();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const apiBase = useAuthStore((state) => state.apiBase);
@@ -92,6 +96,15 @@ export function LogsPage() {
   const [errorLogsError, setErrorLogsError] = useState('');
   const [requestLogId, setRequestLogId] = useState<string | null>(null);
   const [requestLogDownloading, setRequestLogDownloading] = useState(false);
+  const usageJump = useMemo(() => readUsageLogsJump(searchParams), [searchParams]);
+  const usageJumpMethod = useMemo<HttpMethod | undefined>(() => {
+    const method = usageJump.method?.toUpperCase();
+    return HTTP_METHODS.includes(method as HttpMethod) ? (method as HttpMethod) : undefined;
+  }, [usageJump.method]);
+  const usageJumpStatusGroup = useMemo(
+    () => resolveStatusGroup(usageJump.statusCode ?? undefined),
+    [usageJump.statusCode]
+  );
 
   const trace = useTraceResolver({
     traceScopeKey,
@@ -109,6 +122,8 @@ export function LogsPage() {
   } | null>(null);
   const logRequestInFlightRef = useRef(false);
   const pendingFullReloadRef = useRef(false);
+  const appliedUsageJumpSignatureRef = useRef('');
+  const openedUsageTraceSignatureRef = useRef('');
 
   // 保存最新时间戳用于增量获取
   const latestTimestampRef = useRef<number>(0);
@@ -316,6 +331,57 @@ export function LogsPage() {
   const structuredFiltersPanelId = 'logs-structured-filters';
   const structuredFilterCount =
     filters.methodFilters.length + filters.statusFilters.length + filters.pathFilters.length;
+
+  useEffect(() => {
+    if (!usageJump.hasPayload) {
+      return;
+    }
+    if (appliedUsageJumpSignatureRef.current === usageJump.signature) {
+      return;
+    }
+
+    appliedUsageJumpSignatureRef.current = usageJump.signature;
+    setActiveTab('logs');
+    setSearchQuery(usageJump.searchText);
+    setStructuredFiltersExpanded(true);
+    filters.replaceStructuredFilters({
+      methods: usageJumpMethod ? [usageJumpMethod] : [],
+      statuses: usageJumpStatusGroup ? [usageJumpStatusGroup] : [],
+      paths: usageJump.path ? [usageJump.path] : []
+    });
+  }, [
+    filters.replaceStructuredFilters,
+    setStructuredFiltersExpanded,
+    usageJump,
+    usageJumpMethod,
+    usageJumpStatusGroup
+  ]);
+
+  useEffect(() => {
+    if (!usageJump.hasPayload || !usageJump.trace || !usageJump.path) {
+      return;
+    }
+    if (!isTraceableRequestPath(usageJump.path)) {
+      return;
+    }
+    if (connectionStatus !== 'connected') {
+      return;
+    }
+    if (openedUsageTraceSignatureRef.current === usageJump.signature) {
+      return;
+    }
+
+    openedUsageTraceSignatureRef.current = usageJump.signature;
+    trace.openTraceModal({
+      raw: [usageJump.requestId, usageJump.method, usageJump.path].filter(Boolean).join(' ') || usageJump.path,
+      timestamp: usageJump.timestamp ?? undefined,
+      requestId: usageJump.requestId ?? undefined,
+      statusCode: usageJump.statusCode ?? undefined,
+      method: usageJumpMethod,
+      path: usageJump.path,
+      message: usageJump.model ? `model=${usageJump.model}` : ''
+    });
+  }, [connectionStatus, trace, usageJump, usageJumpMethod]);
 
   const { filteredParsedLines, filteredLines, removedCount } = useMemo(() => {
     const filteredParsed = parsedSearchLines.filter((line) => {

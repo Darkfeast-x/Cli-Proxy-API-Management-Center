@@ -1,10 +1,13 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Select } from '@/components/ui/Select';
 import { authFilesApi } from '@/services/api/authFiles';
+import { buildUsageLogsJumpSearch } from '@/utils/logsJump';
+import { isTraceableRequestPath } from '@/pages/hooks/useTraceResolver';
 import type { GeminiKeyConfig, ProviderKeyConfig, OpenAIProviderConfig } from '@/types';
 import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
@@ -26,6 +29,8 @@ import { downloadBlob } from '@/utils/download';
 import styles from '@/pages/UsagePage.module.scss';
 
 const ALL_FILTER = '__all__';
+const RESULT_FILTER_SUCCESS = 'success';
+const RESULT_FILTER_FAILURE = 'failure';
 const MAX_RENDERED_EVENTS = 500;
 const DETAIL_FIELD_NOT_AVAILABLE = '-';
 const REQUEST_DETAIL_STATUS_PATHS: ReadonlyArray<readonly string[]> = [
@@ -92,6 +97,16 @@ const REQUEST_DETAIL_REASONING_PATHS: ReadonlyArray<readonly string[]> = [
   ['response', 'body', 'reasoningEffort'],
   ['response', 'body', 'effort'],
   ['response', 'body', 'reasoning', 'effort']
+];
+const REQUEST_DETAIL_REQUEST_ID_PATHS: ReadonlyArray<readonly string[]> = [
+  ['request_id'],
+  ['requestId'],
+  ['request', 'request_id'],
+  ['request', 'requestId'],
+  ['response', 'request_id'],
+  ['response', 'requestId'],
+  ['metadata', 'request_id'],
+  ['metadata', 'requestId']
 ];
 const REQUEST_DETAIL_SERVICE_TIER_PATHS: ReadonlyArray<readonly string[]> = [
   ['service_tier'],
@@ -184,6 +199,7 @@ const REQUEST_DETAIL_EXCLUDED_KEYS = new Set([
   'url'
 ]);
 const REQUEST_DETAIL_MAX_ADDITIONAL_DEPTH = 3;
+const REQUEST_EVENT_ENDPOINT_METHOD_REGEX = /^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)/i;
 
 type RequestEventRow = {
   id: string;
@@ -196,6 +212,7 @@ type RequestEventRow = {
   sourceRawDisplay: string;
   source: string;
   sourceType: string;
+  requestId: string | null;
   authIndex: string;
   failed: boolean;
   latencyMs: number | null;
@@ -355,6 +372,19 @@ const maskDetailFieldValue = (pathKey: string, value: string) => {
   return obfuscateUsageDisplayValue(value, { kind });
 };
 
+const resolveRequestPathFromEndpoint = (endpoint: string | null): string | null => {
+  if (!endpoint) {
+    return null;
+  }
+
+  const match = endpoint.match(REQUEST_EVENT_ENDPOINT_METHOD_REGEX);
+  if (match?.[2]) {
+    return match[2];
+  }
+
+  return endpoint;
+};
+
 const buildAdditionalFields = (rawDetail: Record<string, unknown>): RequestEventDetailField[] => {
   const fields: RequestEventDetailField[] = [];
   const seen = new Set<string>();
@@ -422,6 +452,46 @@ const encodeCsv = (value: string | number): string => {
   return `"${safeText.replace(/"/g, '""')}"`;
 };
 
+const sortStringValues = (values: string[]) => values.sort((left, right) => left.localeCompare(right));
+
+const sortStatusCodeValues = (values: string[]) =>
+  [...values].sort((left, right) => {
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+    const leftIsNumber = Number.isFinite(leftNumber);
+    const rightIsNumber = Number.isFinite(rightNumber);
+
+    if (leftIsNumber && rightIsNumber) {
+      return leftNumber - rightNumber;
+    }
+
+    if (leftIsNumber) return -1;
+    if (rightIsNumber) return 1;
+
+    return left.localeCompare(right);
+  });
+
+const sortReasoningValues = (values: string[]) => {
+  const order = new Map([
+    ['low', 0],
+    ['medium', 1],
+    ['high', 2],
+    ['xhigh', 3],
+    [DETAIL_FIELD_NOT_AVAILABLE, 99]
+  ]);
+
+  return [...values].sort((left, right) => {
+    const leftRank = order.get(left.toLowerCase());
+    const rightRank = order.get(right.toLowerCase());
+
+    if (leftRank !== undefined || rightRank !== undefined) {
+      return (leftRank ?? 50) - (rightRank ?? 50);
+    }
+
+    return left.localeCompare(right);
+  });
+};
+
 export function RequestEventsDetailsCard({
   usage,
   loading,
@@ -433,6 +503,7 @@ export function RequestEventsDetailsCard({
   modelPrices
 }: RequestEventsDetailsCardProps) {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const latencyHint = t('usage_stats.latency_unit_hint', {
     field: LATENCY_SOURCE_FIELD,
     unit: t('usage_stats.duration_unit_ms')
@@ -441,6 +512,11 @@ export function RequestEventsDetailsCard({
   const [modelFilter, setModelFilter] = useState(ALL_FILTER);
   const [sourceFilter, setSourceFilter] = useState(ALL_FILTER);
   const [authIndexFilter, setAuthIndexFilter] = useState(ALL_FILTER);
+  const [resultFilter, setResultFilter] = useState(ALL_FILTER);
+  const [statusCodeFilter, setStatusCodeFilter] = useState(ALL_FILTER);
+  const [reasoningEffortFilter, setReasoningEffortFilter] = useState(ALL_FILTER);
+  const [serviceTierFilter, setServiceTierFilter] = useState(ALL_FILTER);
+  const [requestMethodFilter, setRequestMethodFilter] = useState(ALL_FILTER);
   const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
   const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(new Set());
 
@@ -542,6 +618,9 @@ export function RequestEventsDetailsCard({
           normalizeOptionalDetailValue(getFirstDisplayValue(rawDetail, REQUEST_DETAIL_REASONING_PATHS))
         )
       );
+      const requestId = normalizeOptionalDetailValue(
+        getFirstDisplayValue(rawDetail, REQUEST_DETAIL_REQUEST_ID_PATHS)
+      );
       const serviceTier = withDetailFallback(
         normalizeOptionalDetailValue(getFirstDisplayValue(rawDetail, REQUEST_DETAIL_SERVICE_TIER_PATHS))
       );
@@ -562,6 +641,7 @@ export function RequestEventsDetailsCard({
         sourceRawDisplay,
         source,
         sourceType,
+        requestId,
         authIndex,
         failed: detail.failed === true,
         latencyMs,
@@ -658,17 +738,100 @@ export function RequestEventsDetailsCard({
     [rows, t]
   );
 
+  const resultOptions = useMemo(
+    () => [
+      { value: ALL_FILTER, label: t('usage_stats.filter_all') },
+      { value: RESULT_FILTER_SUCCESS, label: t('stats.success') },
+      { value: RESULT_FILTER_FAILURE, label: t('stats.failure') }
+    ],
+    [t]
+  );
+
+  const statusCodeOptions = useMemo(
+    () => [
+      { value: ALL_FILTER, label: t('usage_stats.filter_all') },
+      ...sortStatusCodeValues(Array.from(new Set(rows.map((row) => row.statusCode)))).map((statusCode) => ({
+        value: statusCode,
+        label: statusCode
+      }))
+    ],
+    [rows, t]
+  );
+
+  const reasoningEffortOptions = useMemo(
+    () => [
+      { value: ALL_FILTER, label: t('usage_stats.filter_all') },
+      ...sortReasoningValues(Array.from(new Set(rows.map((row) => row.reasoningEffort)))).map((reasoningEffort) => ({
+        value: reasoningEffort,
+        label: reasoningEffort
+      }))
+    ],
+    [rows, t]
+  );
+
+  const serviceTierOptions = useMemo(
+    () => [
+      { value: ALL_FILTER, label: t('usage_stats.filter_all') },
+      ...sortStringValues(Array.from(new Set(rows.map((row) => row.serviceTier)))).map((serviceTier) => ({
+        value: serviceTier,
+        label: serviceTier
+      }))
+    ],
+    [rows, t]
+  );
+
+  const requestMethodOptions = useMemo(
+    () => [
+      { value: ALL_FILTER, label: t('usage_stats.filter_all') },
+      ...sortStringValues(Array.from(new Set(rows.map((row) => row.endpointMethod)))).map((requestMethod) => ({
+        value: requestMethod,
+        label: requestMethod
+      }))
+    ],
+    [rows, t]
+  );
+
   const modelOptionSet = useMemo(() => new Set(modelOptions.map((option) => option.value)), [modelOptions]);
   const sourceOptionSet = useMemo(() => new Set(sourceOptions.map((option) => option.value)), [sourceOptions]);
   const authIndexOptionSet = useMemo(
     () => new Set(authIndexOptions.map((option) => option.value)),
     [authIndexOptions]
   );
+  const resultOptionSet = useMemo(() => new Set(resultOptions.map((option) => option.value)), [resultOptions]);
+  const statusCodeOptionSet = useMemo(
+    () => new Set(statusCodeOptions.map((option) => option.value)),
+    [statusCodeOptions]
+  );
+  const reasoningEffortOptionSet = useMemo(
+    () => new Set(reasoningEffortOptions.map((option) => option.value)),
+    [reasoningEffortOptions]
+  );
+  const serviceTierOptionSet = useMemo(
+    () => new Set(serviceTierOptions.map((option) => option.value)),
+    [serviceTierOptions]
+  );
+  const requestMethodOptionSet = useMemo(
+    () => new Set(requestMethodOptions.map((option) => option.value)),
+    [requestMethodOptions]
+  );
 
   const effectiveModelFilter = modelOptionSet.has(modelFilter) ? modelFilter : ALL_FILTER;
   const effectiveSourceFilter = sourceOptionSet.has(sourceFilter) ? sourceFilter : ALL_FILTER;
   const effectiveAuthIndexFilter = authIndexOptionSet.has(authIndexFilter)
     ? authIndexFilter
+    : ALL_FILTER;
+  const effectiveResultFilter = resultOptionSet.has(resultFilter) ? resultFilter : ALL_FILTER;
+  const effectiveStatusCodeFilter = statusCodeOptionSet.has(statusCodeFilter)
+    ? statusCodeFilter
+    : ALL_FILTER;
+  const effectiveReasoningEffortFilter = reasoningEffortOptionSet.has(reasoningEffortFilter)
+    ? reasoningEffortFilter
+    : ALL_FILTER;
+  const effectiveServiceTierFilter = serviceTierOptionSet.has(serviceTierFilter)
+    ? serviceTierFilter
+    : ALL_FILTER;
+  const effectiveRequestMethodFilter = requestMethodOptionSet.has(requestMethodFilter)
+    ? requestMethodFilter
     : ALL_FILTER;
 
   const filteredRows = useMemo(
@@ -680,9 +843,41 @@ export function RequestEventsDetailsCard({
           effectiveSourceFilter === ALL_FILTER || row.sourceKey === effectiveSourceFilter;
         const authIndexMatched =
           effectiveAuthIndexFilter === ALL_FILTER || row.authIndex === effectiveAuthIndexFilter;
-        return modelMatched && sourceMatched && authIndexMatched;
+        const resultMatched =
+          effectiveResultFilter === ALL_FILTER ||
+          (effectiveResultFilter === RESULT_FILTER_SUCCESS ? !row.failed : row.failed);
+        const statusCodeMatched =
+          effectiveStatusCodeFilter === ALL_FILTER || row.statusCode === effectiveStatusCodeFilter;
+        const reasoningEffortMatched =
+          effectiveReasoningEffortFilter === ALL_FILTER ||
+          row.reasoningEffort === effectiveReasoningEffortFilter;
+        const serviceTierMatched =
+          effectiveServiceTierFilter === ALL_FILTER || row.serviceTier === effectiveServiceTierFilter;
+        const requestMethodMatched =
+          effectiveRequestMethodFilter === ALL_FILTER || row.endpointMethod === effectiveRequestMethodFilter;
+
+        return (
+          modelMatched &&
+          sourceMatched &&
+          authIndexMatched &&
+          resultMatched &&
+          statusCodeMatched &&
+          reasoningEffortMatched &&
+          serviceTierMatched &&
+          requestMethodMatched
+        );
       }),
-    [effectiveAuthIndexFilter, effectiveModelFilter, effectiveSourceFilter, rows]
+    [
+      effectiveAuthIndexFilter,
+      effectiveModelFilter,
+      effectiveReasoningEffortFilter,
+      effectiveRequestMethodFilter,
+      effectiveResultFilter,
+      effectiveServiceTierFilter,
+      effectiveSourceFilter,
+      effectiveStatusCodeFilter,
+      rows
+    ]
   );
 
   const renderedRows = useMemo(() => filteredRows.slice(0, MAX_RENDERED_EVENTS), [filteredRows]);
@@ -691,12 +886,22 @@ export function RequestEventsDetailsCard({
   const hasActiveFilters =
     effectiveModelFilter !== ALL_FILTER ||
     effectiveSourceFilter !== ALL_FILTER ||
-    effectiveAuthIndexFilter !== ALL_FILTER;
+    effectiveAuthIndexFilter !== ALL_FILTER ||
+    effectiveResultFilter !== ALL_FILTER ||
+    effectiveStatusCodeFilter !== ALL_FILTER ||
+    effectiveReasoningEffortFilter !== ALL_FILTER ||
+    effectiveServiceTierFilter !== ALL_FILTER ||
+    effectiveRequestMethodFilter !== ALL_FILTER;
 
   const handleClearFilters = () => {
     setModelFilter(ALL_FILTER);
     setSourceFilter(ALL_FILTER);
     setAuthIndexFilter(ALL_FILTER);
+    setResultFilter(ALL_FILTER);
+    setStatusCodeFilter(ALL_FILTER);
+    setReasoningEffortFilter(ALL_FILTER);
+    setServiceTierFilter(ALL_FILTER);
+    setRequestMethodFilter(ALL_FILTER);
   };
 
   useEffect(() => {
@@ -818,6 +1023,23 @@ export function RequestEventsDetailsCard({
     );
   };
 
+  const handleOpenLogs = (row: RequestEventRow, traceRequested: boolean) => {
+    const requestPath = row.endpointPath ?? resolveRequestPathFromEndpoint(row.endpoint);
+    const statusCodeNumber = Number.parseInt(row.statusCode, 10);
+    const search = buildUsageLogsJumpSearch({
+      searchText: row.requestId || requestPath || row.endpoint || row.timestamp,
+      method: row.endpointMethod !== DETAIL_FIELD_NOT_AVAILABLE ? row.endpointMethod : null,
+      path: requestPath,
+      statusCode: Number.isFinite(statusCodeNumber) ? statusCodeNumber : null,
+      timestamp: row.timestamp,
+      model: row.model !== DETAIL_FIELD_NOT_AVAILABLE ? row.model : null,
+      requestId: row.requestId,
+      trace: traceRequested
+    });
+
+    navigate(search ? `/logs?${search}` : '/logs');
+  };
+
   return (
     <Card
       title={t('usage_stats.request_events_title')}
@@ -868,6 +1090,67 @@ export function RequestEventsDetailsCard({
             onChange={setAuthIndexFilter}
             className={styles.requestEventsSelect}
             ariaLabel={t('usage_stats.request_events_filter_auth_index')}
+            fullWidth={false}
+          />
+        </div>
+        <div className={styles.requestEventsFilterItem}>
+          <span className={styles.requestEventsFilterLabel}>{t('usage_stats.request_events_filter_result')}</span>
+          <Select
+            value={effectiveResultFilter}
+            options={resultOptions}
+            onChange={setResultFilter}
+            className={styles.requestEventsSelect}
+            ariaLabel={t('usage_stats.request_events_filter_result')}
+            fullWidth={false}
+          />
+        </div>
+        <div className={styles.requestEventsFilterItem}>
+          <span className={styles.requestEventsFilterLabel}>{t('usage_stats.request_events_filter_status_code')}</span>
+          <Select
+            value={effectiveStatusCodeFilter}
+            options={statusCodeOptions}
+            onChange={setStatusCodeFilter}
+            className={styles.requestEventsSelect}
+            ariaLabel={t('usage_stats.request_events_filter_status_code')}
+            fullWidth={false}
+          />
+        </div>
+        <div className={styles.requestEventsFilterItem}>
+          <span className={styles.requestEventsFilterLabel}>
+            {t('usage_stats.request_events_filter_reasoning_effort')}
+          </span>
+          <Select
+            value={effectiveReasoningEffortFilter}
+            options={reasoningEffortOptions}
+            onChange={setReasoningEffortFilter}
+            className={styles.requestEventsSelect}
+            ariaLabel={t('usage_stats.request_events_filter_reasoning_effort')}
+            fullWidth={false}
+          />
+        </div>
+        <div className={styles.requestEventsFilterItem}>
+          <span className={styles.requestEventsFilterLabel}>
+            {t('usage_stats.request_events_filter_service_tier')}
+          </span>
+          <Select
+            value={effectiveServiceTierFilter}
+            options={serviceTierOptions}
+            onChange={setServiceTierFilter}
+            className={styles.requestEventsSelect}
+            ariaLabel={t('usage_stats.request_events_filter_service_tier')}
+            fullWidth={false}
+          />
+        </div>
+        <div className={styles.requestEventsFilterItem}>
+          <span className={styles.requestEventsFilterLabel}>
+            {t('usage_stats.request_events_filter_request_method')}
+          </span>
+          <Select
+            value={effectiveRequestMethodFilter}
+            options={requestMethodOptions}
+            onChange={setRequestMethodFilter}
+            className={styles.requestEventsSelect}
+            ariaLabel={t('usage_stats.request_events_filter_request_method')}
             fullWidth={false}
           />
         </div>
@@ -985,6 +1268,29 @@ export function RequestEventsDetailsCard({
                         <tr className={styles.requestEventsExpandedRow}>
                           <td colSpan={detailColumnCount} className={styles.requestEventsExpandedCell}>
                             <div className={styles.requestEventsExpandedPanel}>
+                              <div className={styles.requestEventsDetailActions}>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => handleOpenLogs(row, false)}
+                                  disabled={!Boolean(row.requestId || row.endpointPath || row.endpoint)}
+                                >
+                                  {t('usage_stats.request_events_view_logs')}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleOpenLogs(row, true)}
+                                  disabled={
+                                    !isTraceableRequestPath(
+                                      row.endpointPath ?? resolveRequestPathFromEndpoint(row.endpoint) ?? undefined
+                                    )
+                                  }
+                                >
+                                  {t('usage_stats.request_events_open_trace')}
+                                </Button>
+                              </div>
+
                               <div className={styles.requestEventsExpandedGrid}>
                                 {renderDetailTextItem(
                                   t('usage_stats.request_events_detail_status'),
