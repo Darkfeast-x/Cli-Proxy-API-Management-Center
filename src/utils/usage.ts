@@ -1600,6 +1600,204 @@ export function buildDailySeriesByModel(
   return { labels, dataByModel, hasData };
 }
 
+export type GroupTrendMetric = 'requests' | 'tokens';
+
+export interface GroupTrendIdentity {
+  key: string;
+  label: string;
+  type?: string;
+}
+
+export interface GroupTrendSeriesEntry extends GroupTrendIdentity {
+  data: number[];
+  total: number;
+}
+
+export interface GroupTrendSeries {
+  labels: string[];
+  entries: GroupTrendSeriesEntry[];
+  hasData: boolean;
+}
+
+const resolveGroupIncrement = (detail: UsageDetail, metric: GroupTrendMetric) =>
+  metric === 'tokens' ? extractTotalTokens(detail) : 1;
+
+/**
+ * 构建小时级别的分组时序
+ */
+export function buildHourlySeriesByGroup(
+  usageData: unknown,
+  resolveGroup: (detail: UsageDetail) => GroupTrendIdentity | null,
+  metric: GroupTrendMetric = 'requests',
+  hourWindow: number = 24
+): GroupTrendSeries {
+  const hourMs = 60 * 60 * 1000;
+  const resolvedHourWindow =
+    Number.isFinite(hourWindow) && hourWindow > 0
+      ? Math.min(Math.max(Math.floor(hourWindow), 1), 24 * 31)
+      : 24;
+  const now = new Date();
+  const currentHour = new Date(now);
+  currentHour.setMinutes(0, 0, 0);
+
+  const earliestBucket = new Date(currentHour);
+  earliestBucket.setHours(earliestBucket.getHours() - (resolvedHourWindow - 1));
+  const earliestTime = earliestBucket.getTime();
+
+  const labels: string[] = [];
+  for (let i = 0; i < resolvedHourWindow; i++) {
+    labels.push(formatHourLabel(new Date(earliestTime + i * hourMs)));
+  }
+
+  const details = collectUsageDetails(usageData);
+  const entriesByGroup = new Map<string, GroupTrendSeriesEntry>();
+  let hasData = false;
+
+  if (!details.length) {
+    return { labels, entries: [], hasData };
+  }
+
+  details.forEach((detail) => {
+    const timestamp =
+      typeof detail.__timestampMs === 'number'
+        ? detail.__timestampMs
+        : parseTimestampMs(detail.timestamp);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return;
+    }
+
+    const normalized = new Date(timestamp);
+    normalized.setMinutes(0, 0, 0);
+    const bucketStart = normalized.getTime();
+    const lastBucketTime = earliestTime + (labels.length - 1) * hourMs;
+    if (bucketStart < earliestTime || bucketStart > lastBucketTime) {
+      return;
+    }
+
+    const bucketIndex = Math.floor((bucketStart - earliestTime) / hourMs);
+    if (bucketIndex < 0 || bucketIndex >= labels.length) {
+      return;
+    }
+
+    const group = resolveGroup(detail);
+    const key = group?.key?.trim() || group?.label?.trim();
+    if (!key) {
+      return;
+    }
+
+    const increment = resolveGroupIncrement(detail, metric);
+    if (metric === 'tokens' && increment <= 0) {
+      return;
+    }
+
+    const label = group?.label?.trim() || key;
+    const type = group?.type?.trim() || '';
+    if (!entriesByGroup.has(key)) {
+      entriesByGroup.set(key, {
+        key,
+        label,
+        type,
+        data: new Array(labels.length).fill(0),
+        total: 0,
+      });
+    }
+
+    const entry = entriesByGroup.get(key)!;
+    entry.data[bucketIndex] += increment;
+    entry.total += increment;
+    hasData = true;
+  });
+
+  return {
+    labels,
+    entries: Array.from(entriesByGroup.values()).sort(
+      (a, b) => b.total - a.total || a.label.localeCompare(b.label)
+    ),
+    hasData,
+  };
+}
+
+/**
+ * 构建日级别的分组时序
+ */
+export function buildDailySeriesByGroup(
+  usageData: unknown,
+  resolveGroup: (detail: UsageDetail) => GroupTrendIdentity | null,
+  metric: GroupTrendMetric = 'requests'
+): GroupTrendSeries {
+  const details = collectUsageDetails(usageData);
+  const labelsSet = new Set<string>();
+  const valuesByGroup = new Map<
+    string,
+    GroupTrendIdentity & {
+      valueByDay: Map<string, number>;
+      total: number;
+    }
+  >();
+  let hasData = false;
+
+  if (!details.length) {
+    return { labels: [], entries: [], hasData };
+  }
+
+  details.forEach((detail) => {
+    const timestamp =
+      typeof detail.__timestampMs === 'number'
+        ? detail.__timestampMs
+        : parseTimestampMs(detail.timestamp);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return;
+    }
+
+    const dayLabel = formatDayLabel(new Date(timestamp));
+    if (!dayLabel) {
+      return;
+    }
+
+    const group = resolveGroup(detail);
+    const key = group?.key?.trim() || group?.label?.trim();
+    if (!key) {
+      return;
+    }
+
+    const increment = resolveGroupIncrement(detail, metric);
+    if (metric === 'tokens' && increment <= 0) {
+      return;
+    }
+
+    const label = group?.label?.trim() || key;
+    const type = group?.type?.trim() || '';
+    if (!valuesByGroup.has(key)) {
+      valuesByGroup.set(key, {
+        key,
+        label,
+        type,
+        valueByDay: new Map<string, number>(),
+        total: 0,
+      });
+    }
+
+    const entry = valuesByGroup.get(key)!;
+    entry.valueByDay.set(dayLabel, (entry.valueByDay.get(dayLabel) || 0) + increment);
+    entry.total += increment;
+    labelsSet.add(dayLabel);
+    hasData = true;
+  });
+
+  const labels = Array.from(labelsSet).sort();
+  const entries = Array.from(valuesByGroup.values())
+    .map((entry) => ({
+      key: entry.key,
+      label: entry.label,
+      type: entry.type,
+      total: entry.total,
+      data: labels.map((label) => entry.valueByDay.get(label) || 0),
+    }))
+    .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+
+  return { labels, entries, hasData };
+}
+
 export interface ChartDataset {
   label: string;
   data: number[];

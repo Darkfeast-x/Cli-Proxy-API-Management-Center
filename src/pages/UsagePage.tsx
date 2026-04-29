@@ -29,6 +29,7 @@ import {
   ModelStatsCard,
   PriceSettingsCard,
   CredentialStatsCard,
+  CredentialTrendChart,
   TopAnomaliesCard,
   RequestEventsDetailsCard,
   TokenBreakdownChart,
@@ -718,6 +719,16 @@ export function UsagePage() {
         <ApiDetailsCard apiStats={apiStats} loading={loading} hasPrices={hasPrices} />
         <ModelStatsCard modelStats={modelStats} loading={loading} hasPrices={hasPrices} />
       </div>
+
+      <CredentialTrendChart
+        usage={filteredUsage}
+        loading={loading}
+        isDark={isDark}
+        isMobile={isMobile}
+        sourceInfoMap={sourceInfoMap}
+        authFileMap={authFileMap}
+        hourWindowHours={hourWindowHours}
+      />
 
       <CredentialStatsCard
         usage={filteredUsage}
